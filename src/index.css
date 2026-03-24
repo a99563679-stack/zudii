@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bharat-saffron: #FF9933;
+  --color-bharat-white: #FFFFFF;
+  --color-bharat-green: #138808;
+  --color-bharat-blue: #000080;
+  --color-bharat-chakra: #000080;
+  
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply antialiased;
+    background: linear-gradient(180deg, #FF9933 0%, #FFFFFF 50%, #138808 100%);
+    background-attachment: fixed;
+  }
+}
+
+.glass-card {
+  background: transparent;
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.chakra-logo {
+  background: radial-gradient(circle, #ffffff 0%, #f0f0f0 100%);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+@keyframes rotate-chakra {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-chakra {
+  animation: rotate-chakra 20s linear infinite;
+}
+
+.animate-chakra-spin {
+  animation: rotate-chakra 3s linear infinite;
+}
+
+.message-bubble {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
