@@ -1,5 +1,5 @@
 {
   "name": "Bharat AI",
   "description": "A sophisticated AI assistant inspired by the spirit of Bharat, providing intelligent and culturally aware responses.",
-  "requestFramePermissions": []
+  "requestFramePermissions": ["microphone"]
 }

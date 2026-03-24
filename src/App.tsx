@@ -4,7 +4,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { 
   Send, 
   Menu, 
@@ -17,7 +17,9 @@ import {
   FileText, 
   BookOpen,
   Paperclip,
-  File
+  File,
+  Mic,
+  MicOff
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'motion/react';
@@ -29,6 +31,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  detectedLanguage?: string;
 }
 
 const AshokaChakra = ({ className }: { className?: string }) => (
@@ -70,14 +73,17 @@ export default function App() {
     {
       id: '1',
       role: 'assistant',
-      content: 'Namaste! I am Bharat AI, your assistant. How can I help you today?',
+      content: 'Namaste! I am Bharat AI, your assistant. I can understand and speak in many Indian languages. How can I help you today?',
       timestamp: new Date(),
+      detectedLanguage: 'Multilingual'
     },
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const [attachedFiles, setAttachedFiles] = useState<{ name: string, type: string, data: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -120,6 +126,61 @@ export default function App() {
 
   const removeFile = (index: number) => {
     setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const toggleListening = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      alert("Voice input is not supported in your browser. Please try Chrome or Edge.");
+      return;
+    }
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsListening(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-IN'; // Default to Indian English
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(prev => prev + (prev ? ' ' : '') + transcript);
+      setIsListening(false);
+    };
+
+    recognition.onerror = (event: any) => {
+      // Handle 'no-speech' error gracefully
+      if (event.error === 'no-speech') {
+        console.warn("No speech was detected. Please try again.");
+      } else {
+        console.error("Speech recognition error:", event.error);
+      }
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
+
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error("Failed to start recognition:", err);
+      setIsListening(false);
+    }
   };
 
   const handleSend = async () => {
@@ -173,15 +234,32 @@ export default function App() {
         model: "gemini-3-flash-preview",
         contents: contents,
         config: {
-          systemInstruction: SYSTEM_INSTRUCTION
+          systemInstruction: SYSTEM_INSTRUCTION + "\n\nIMPORTANT: You MUST respond in JSON format with the following structure: { \"detectedLanguage\": \"string (e.g., Hindi, English, Hinglish)\", \"response\": \"string (your actual response)\" }",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              detectedLanguage: { type: Type.STRING },
+              response: { type: Type.STRING }
+            },
+            required: ["detectedLanguage", "response"]
+          }
         }
       });
       
+      let responseData;
+      try {
+        responseData = JSON.parse(response.text || "{}");
+      } catch (e) {
+        responseData = { response: response.text, detectedLanguage: "Unknown" };
+      }
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: response.text || "I'm sorry, I couldn't process that.",
+        content: responseData.response || "I'm sorry, I couldn't process that.",
         timestamp: new Date(),
+        detectedLanguage: responseData.detectedLanguage
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -326,7 +404,7 @@ export default function App() {
           </button>
           
           <div className="flex items-center gap-3">
-            <div className="w-14 h-14 rounded-2xl chakra-logo flex items-center justify-center p-2 bg-white">
+            <div className="w-16 h-16 rounded-2xl chakra-logo flex items-center justify-center p-2.5 bg-white">
               <AshokaChakra className="w-full h-full animate-chakra" />
             </div>
             <div className="flex flex-col">
@@ -384,9 +462,17 @@ export default function App() {
                 message.role === 'user' ? "text-right" : "text-left"
               )}>
                 <div className={cn(
-                  "prose prose-sm max-w-none",
+                  "prose prose-sm max-w-none relative",
                   message.role === 'user' ? "prose-slate inline-block text-left bg-bharat-blue/5 px-4 py-2 rounded-2xl border border-bharat-blue/10" : "prose-slate"
                 )}>
+                  {message.role === 'assistant' && message.detectedLanguage && (
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <div className="px-2 py-0.5 rounded-full bg-bharat-blue/10 border border-bharat-blue/20 flex items-center gap-1">
+                        <Languages size={10} className="text-bharat-blue" />
+                        <span className="text-[9px] font-bold text-bharat-blue uppercase tracking-wider">Detected: {message.detectedLanguage}</span>
+                      </div>
+                    </div>
+                  )}
                   <ReactMarkdown>{message.content}</ReactMarkdown>
                 </div>
               </div>
@@ -400,7 +486,7 @@ export default function App() {
             className="w-full py-2"
           >
             <div className="flex items-center gap-3">
-              <div className="w-6 h-6 rounded-full glass-card flex items-center justify-center p-1 shrink-0 shadow-sm">
+              <div className="w-10 h-10 rounded-full glass-card flex items-center justify-center p-1.5 shrink-0 shadow-sm">
                 <AshokaChakra className="w-full h-full animate-chakra-spin" />
               </div>
               <div className="flex gap-1">
@@ -415,8 +501,8 @@ export default function App() {
       </main>
 
       {/* Input Area */}
-      <footer className="p-6 z-10 flex flex-col items-center gap-6">
-        <div className="w-full max-w-2xl flex flex-col gap-4">
+      <footer className="p-3 md:p-6 z-10 flex flex-col items-center gap-4 md:gap-6">
+        <div className="w-full max-w-2xl flex flex-col gap-2 md:gap-4">
           {attachedFiles.length > 0 && (
             <div className="flex flex-wrap gap-2 px-2">
               <AnimatePresence>
@@ -439,8 +525,8 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex items-center gap-4">
-            <div className="flex-1 glass-card rounded-full px-6 py-4 flex items-center gap-4 shadow-lg">
+          <div className="flex items-center gap-2 md:gap-4">
+            <div className="flex-1 glass-card rounded-full px-4 py-2.5 md:px-6 md:py-4 flex items-center gap-2 md:gap-4 shadow-lg">
               <input 
                 type="file" 
                 ref={fileInputRef} 
@@ -452,7 +538,7 @@ export default function App() {
                 onClick={() => fileInputRef.current?.click()}
                 className="text-slate-400 hover:text-bharat-blue transition-colors"
               >
-                <Paperclip size={20} />
+                <Paperclip className="size-4 md:size-5" />
               </button>
               <input
                 type="text"
@@ -462,19 +548,28 @@ export default function App() {
                 placeholder="Type your message..."
                 className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 font-medium"
               />
+              <button 
+                onClick={toggleListening}
+                className={cn(
+                  "transition-all duration-300",
+                  isListening ? "text-red-500 scale-125 animate-pulse" : "text-slate-400 hover:text-bharat-blue"
+                )}
+              >
+                {isListening ? <MicOff className="size-4 md:size-5" /> : <Mic className="size-4 md:size-5" />}
+              </button>
+              <button
+                onClick={handleSend}
+                disabled={(!input.trim() && attachedFiles.length === 0) || isLoading}
+                className={cn(
+                  "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all shadow-md shrink-0",
+                  (!input.trim() && attachedFiles.length === 0) || isLoading
+                    ? "bg-slate-100 text-slate-300 cursor-not-allowed"
+                    : "bg-bharat-blue text-white hover:scale-105 active:scale-95"
+                )}
+              >
+                <Send size={18} className="md:size-20 rotate-[-15deg] translate-x-0.5" />
+              </button>
             </div>
-            <button
-              onClick={handleSend}
-              disabled={(!input.trim() && attachedFiles.length === 0) || isLoading}
-              className={cn(
-                "w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-xl",
-                (!input.trim() && attachedFiles.length === 0) || isLoading
-                  ? "bg-white/50 text-slate-300 cursor-not-allowed"
-                  : "bg-white text-bharat-blue hover:scale-105 active:scale-95"
-              )}
-            >
-              <Send size={28} className="rotate-[-15deg] translate-x-0.5" />
-            </button>
           </div>
         </div>
 

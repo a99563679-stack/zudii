@@ -25,8 +25,9 @@
 }
 
 .chakra-logo {
-  background: radial-gradient(circle, #ffffff 0%, #f0f0f0 100%);
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(180deg, #FF9933 0%, #FFFFFF 50%, #138808 100%);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  border: 2px solid white;
 }
 
 @keyframes rotate-chakra {
