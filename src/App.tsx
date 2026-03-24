@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { 
   Send, 
@@ -19,12 +19,47 @@ import {
   Paperclip,
   File,
   Mic,
-  MicOff
+  MicOff,
+  Plus,
+  Trash2,
+  MessageSquare,
+  LogIn,
+  LogOut,
+  User as UserIcon,
+  Volume2,
+  VolumeX,
+  Play
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import { BHARAT_AI_PERSONA, BHARAT_AI_FEATURES, SYSTEM_INSTRUCTION } from './constants/persona';
+import { 
+  auth, 
+  db, 
+  googleProvider, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged, 
+  FirebaseUser,
+  handleFirestoreError,
+  OperationType
+} from './firebase';
+import { 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs, 
+  query, 
+  orderBy, 
+  onSnapshot, 
+  deleteDoc,
+  Timestamp,
+  addDoc,
+  writeBatch
+} from 'firebase/firestore';
+import { Modality } from "@google/genai";
 
 interface Message {
   id: string;
@@ -32,6 +67,55 @@ interface Message {
   content: string;
   timestamp: Date;
   detectedLanguage?: string;
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  timestamp: Date;
+}
+
+// Error Boundary Component
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, errorInfo: string }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorInfo: '' };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorInfo: error.message };
+  }
+
+  componentDidCatch(error: any, errorInfo: ErrorInfo) {
+    console.error("Uncaught error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6 text-center">
+          <div className="max-w-md glass-card p-8 rounded-3xl shadow-xl">
+            <h1 className="text-2xl font-black text-red-600 mb-4">Something went wrong</h1>
+            <p className="text-slate-600 mb-6">We encountered an unexpected error. Please try refreshing the page.</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-6 py-3 bg-bharat-blue text-white rounded-2xl font-bold shadow-lg hover:scale-105 transition-transform"
+            >
+              Refresh Page
+            </button>
+            {process.env.NODE_ENV === 'development' && (
+              <pre className="mt-6 p-4 bg-black/5 rounded-xl text-left text-[10px] overflow-auto max-h-40 text-slate-500">
+                {this.state.errorInfo}
+              </pre>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
 }
 
 const AshokaChakra = ({ className }: { className?: string }) => (
@@ -68,7 +152,19 @@ const BHARAT_LANGUAGES = [
 ];
 
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <BharatAIApp />
+    </ErrorBoundary>
+  );
+}
+
+function BharatAIApp() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [langIndex, setLangIndex] = useState(0);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -87,6 +183,8 @@ export default function App() {
   const [attachedFiles, setAttachedFiles] = useState<{ name: string, type: string, data: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isPlaying, setIsPlaying] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   
   useEffect(() => {
     const interval = setInterval(() => {
@@ -95,8 +193,241 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Auth state listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      setIsAuthReady(true);
+      
+      if (firebaseUser) {
+        // Create or update user profile in Firestore
+        const userRef = doc(db, 'users', firebaseUser.uid);
+        setDoc(userRef, {
+          uid: firebaseUser.uid,
+          displayName: firebaseUser.displayName,
+          email: firebaseUser.email,
+          photoURL: firebaseUser.photoURL,
+          role: 'user',
+          createdAt: Timestamp.now()
+        }, { merge: true }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${firebaseUser.uid}`));
+      } else {
+        // Reset state on logout
+        setSessions([]);
+        setCurrentSessionId(null);
+        setMessages([
+          {
+            id: '1',
+            role: 'assistant',
+            content: 'Namaste! I am Bharat AI, your assistant. I can understand and speak in many Indian languages. How can I help you today?',
+            timestamp: new Date(),
+            detectedLanguage: 'Multilingual'
+          },
+        ]);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Load sessions from Firestore
+  useEffect(() => {
+    if (!user) return;
+
+    const sessionsRef = collection(db, 'users', user.uid, 'sessions');
+    const q = query(sessionsRef, orderBy('timestamp', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loadedSessions: ChatSession[] = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          title: data.title,
+          timestamp: data.timestamp.toDate(),
+          messages: [] // Messages will be loaded per session
+        };
+      });
+      setSessions(loadedSessions);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/sessions`));
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Load messages for current session from Firestore
+  useEffect(() => {
+    if (!user || !currentSessionId) return;
+
+    const messagesRef = collection(db, 'users', user.uid, 'sessions', currentSessionId, 'messages');
+    const q = query(messagesRef, orderBy('timestamp', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (snapshot.empty && messages.length === 0) {
+        // Initial welcome message if no messages exist
+        setMessages([
+          {
+            id: '1',
+            role: 'assistant',
+            content: 'Namaste! I am Bharat AI, your assistant. I can understand and speak in many Indian languages. How can I help you today?',
+            timestamp: new Date(),
+            detectedLanguage: 'Multilingual'
+          },
+        ]);
+        return;
+      }
+
+      const loadedMessages: Message[] = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          role: data.role,
+          content: data.content,
+          timestamp: data.timestamp.toDate(),
+          detectedLanguage: data.detectedLanguage
+        };
+      });
+      setMessages(loadedMessages);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/sessions/${currentSessionId}/messages`));
+
+    return () => unsubscribe();
+  }, [user, currentSessionId]);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+  };
+
+  const playTTS = async (messageId: string, text: string) => {
+    if (isPlaying === messageId) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        setIsPlaying(null);
+      }
+      return;
+    }
+
+    setIsPlaying(messageId);
+    try {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: `Speak this clearly: ${text}` }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' },
+            },
+          },
+        },
+      });
+
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        const audioUrl = `data:audio/mp3;base64,${base64Audio}`;
+        if (audioRef.current) {
+          audioRef.current.src = audioUrl;
+          audioRef.current.play();
+          audioRef.current.onended = () => setIsPlaying(null);
+        } else {
+          const audio = new Audio(audioUrl);
+          audioRef.current = audio;
+          audio.play();
+          audio.onended = () => setIsPlaying(null);
+        }
+      }
+    } catch (error) {
+      console.error("TTS Error:", error);
+      setIsPlaying(null);
+    }
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const startNewChat = async () => {
+    if (!user) {
+      setMessages([
+        {
+          id: '1',
+          role: 'assistant',
+          content: 'Namaste! I am Bharat AI, your assistant. I can understand and speak in many Indian languages. How can I help you today?',
+          timestamp: new Date(),
+          detectedLanguage: 'Multilingual'
+        },
+      ]);
+      setCurrentSessionId(null);
+      setIsSidebarOpen(false);
+      return;
+    }
+
+    const newSessionId = Date.now().toString();
+    const sessionRef = doc(db, 'users', user.uid, 'sessions', newSessionId);
+    
+    try {
+      await setDoc(sessionRef, {
+        id: newSessionId,
+        userId: user.uid,
+        title: 'New Chat',
+        timestamp: Timestamp.now()
+      });
+      
+      const welcomeMsgId = '1';
+      const welcomeMsgRef = doc(db, 'users', user.uid, 'sessions', newSessionId, 'messages', welcomeMsgId);
+      await setDoc(welcomeMsgRef, {
+        id: welcomeMsgId,
+        sessionId: newSessionId,
+        role: 'assistant',
+        content: 'Namaste! I am Bharat AI, your assistant. I can understand and speak in many Indian languages. How can I help you today?',
+        timestamp: Timestamp.now(),
+        detectedLanguage: 'Multilingual'
+      });
+
+      setCurrentSessionId(newSessionId);
+      setIsSidebarOpen(false);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sessions/${newSessionId}`);
+    }
+  };
+
+  const switchSession = (id: string) => {
+    setCurrentSessionId(id);
+    setIsSidebarOpen(false);
+  };
+
+  const deleteSession = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!user) return;
+
+    try {
+      const sessionRef = doc(db, 'users', user.uid, 'sessions', id);
+      await deleteDoc(sessionRef);
+      
+      if (currentSessionId === id) {
+        setCurrentSessionId(null);
+        setMessages([
+          {
+            id: '1',
+            role: 'assistant',
+            content: 'Namaste! I am Bharat AI, your assistant. I can understand and speak in many Indian languages. How can I help you today?',
+            timestamp: new Date(),
+            detectedLanguage: 'Multilingual'
+          },
+        ]);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/sessions/${id}`);
+    }
   };
 
   useEffect(() => {
@@ -186,6 +517,33 @@ export default function App() {
   const handleSend = async () => {
     if ((!input.trim() && attachedFiles.length === 0) || isLoading) return;
 
+    let activeSessionId = currentSessionId;
+    
+    // Create a new session if none exists and user is logged in
+    if (!activeSessionId && user) {
+      activeSessionId = Date.now().toString();
+      const sessionRef = doc(db, 'users', user.uid, 'sessions', activeSessionId);
+      try {
+        await setDoc(sessionRef, {
+          id: activeSessionId,
+          userId: user.uid,
+          title: input.slice(0, 30) || 'New Chat',
+          timestamp: Timestamp.now()
+        });
+        setCurrentSessionId(activeSessionId);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sessions/${activeSessionId}`);
+      }
+    } else if (activeSessionId && user) {
+      // Update title if it's the first user message in a "New Chat"
+      const session = sessions.find(s => s.id === activeSessionId);
+      if (session && session.title === 'New Chat' && messages.length <= 1) {
+        const sessionRef = doc(db, 'users', user.uid, 'sessions', activeSessionId);
+        setDoc(sessionRef, { title: input.slice(0, 30) }, { merge: true })
+          .catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/sessions/${activeSessionId}`));
+      }
+    }
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -193,46 +551,54 @@ export default function App() {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    // Optimistic update
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    
+    if (user && activeSessionId) {
+      const msgRef = doc(db, 'users', user.uid, 'sessions', activeSessionId, 'messages', userMessage.id);
+      setDoc(msgRef, {
+        ...userMessage,
+        sessionId: activeSessionId,
+        timestamp: Timestamp.fromDate(userMessage.timestamp)
+      }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sessions/${activeSessionId}/messages/${userMessage.id}`));
+    }
+
     setInput('');
     const currentFiles = [...attachedFiles];
     setAttachedFiles([]);
     setIsLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const ai = new GoogleGenAI({ apiKey });
       
-      const contents = [];
-      
-      // Add previous messages for context
-      messages.forEach(msg => {
-        contents.push({
+      const finalContents = [];
+      newMessages.slice(-10).forEach(msg => { // Limit context to last 10 messages
+        finalContents.push({
           role: msg.role === 'user' ? 'user' : 'model',
           parts: [{ text: msg.content }]
         });
       });
 
-      // Add current message with files
-      const currentParts: any[] = [{ text: input }];
-      
-      currentFiles.forEach(file => {
-        const [mimeType, base64Data] = file.data.split(';base64,');
-        currentParts.push({
-          inlineData: {
-            mimeType: file.type || 'application/octet-stream',
-            data: base64Data
-          }
+      // Handle files in the last message
+      if (currentFiles.length > 0) {
+        const lastParts: any[] = [{ text: input }];
+        currentFiles.forEach(file => {
+          const [_, base64Data] = file.data.split(';base64,');
+          lastParts.push({
+            inlineData: {
+              mimeType: file.type || 'application/octet-stream',
+              data: base64Data
+            }
+          });
         });
-      });
-
-      contents.push({
-        role: 'user',
-        parts: currentParts
-      });
+        finalContents[finalContents.length - 1].parts = lastParts;
+      }
 
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: contents,
+        contents: finalContents,
         config: {
           systemInstruction: SYSTEM_INSTRUCTION + "\n\nIMPORTANT: You MUST respond in JSON format with the following structure: { \"detectedLanguage\": \"string (e.g., Hindi, English, Hinglish)\", \"response\": \"string (your actual response)\" }",
           responseMimeType: "application/json",
@@ -262,7 +628,16 @@ export default function App() {
         detectedLanguage: responseData.detectedLanguage
       };
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      if (user && activeSessionId) {
+        const msgRef = doc(db, 'users', user.uid, 'sessions', activeSessionId, 'messages', assistantMessage.id);
+        await setDoc(msgRef, {
+          ...assistantMessage,
+          sessionId: activeSessionId,
+          timestamp: Timestamp.fromDate(assistantMessage.timestamp)
+        });
+      } else {
+        setMessages((prev) => [...prev, assistantMessage]);
+      }
     } catch (error) {
       console.error("Error calling Gemini API:", error);
       const errorMessage: Message = {
@@ -305,7 +680,7 @@ export default function App() {
                   <div className="w-10 h-10 rounded-xl chakra-logo flex items-center justify-center p-1.5 bg-white">
                     <AshokaChakra className="w-full h-full animate-chakra" />
                   </div>
-                  <span className="font-black text-bharat-blue tracking-tight">Advanced Settings</span>
+                  <span className="font-black text-bharat-blue tracking-tight">Bharat AI</span>
                 </div>
                 <button 
                   onClick={() => setIsSidebarOpen(false)}
@@ -315,9 +690,103 @@ export default function App() {
                 </button>
               </div>
 
+              {user ? (
+                <div className="flex items-center gap-3 p-4 rounded-2xl bg-white/10 border border-white/20">
+                  <img 
+                    src={user.photoURL || ''} 
+                    alt={user.displayName || 'User'} 
+                    className="w-10 h-10 rounded-full border-2 border-bharat-blue"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-black text-slate-800 truncate">{user.displayName}</div>
+                    <button 
+                      onClick={handleLogout}
+                      className="text-[10px] font-bold text-red-500 hover:text-red-600 flex items-center gap-1 mt-0.5"
+                    >
+                      <LogOut size={10} />
+                      Sign Out
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={handleLogin}
+                  className="w-full py-3 px-4 rounded-2xl bg-white border border-bharat-blue/20 text-bharat-blue font-black text-sm flex items-center justify-center gap-2 shadow-md hover:bg-slate-50 transition-all"
+                >
+                  <LogIn size={18} />
+                  Sign In with Google
+                </button>
+              )}
+
+              <button
+                onClick={startNewChat}
+                className="w-full py-3 px-4 rounded-2xl bg-bharat-blue text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all"
+              >
+                <Plus size={18} />
+                New Chat
+              </button>
+
               <div className="flex-1 overflow-y-auto space-y-8 pr-2">
+                {user ? (
+                  sessions.length > 0 ? (
+                    <section>
+                      <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Chat History</h3>
+                      <div className="space-y-2">
+                        {sessions.map((session) => (
+                          <div
+                            key={session.id}
+                            onClick={() => switchSession(session.id)}
+                            className={cn(
+                              "group relative flex items-center gap-3 p-3 rounded-2xl border transition-all cursor-pointer",
+                              currentSessionId === session.id
+                                ? "bg-white border-bharat-blue/20 shadow-sm"
+                                : "bg-white/5 border-transparent hover:bg-white/10"
+                            )}
+                          >
+                            <div className={cn(
+                              "p-2 rounded-lg",
+                              currentSessionId === session.id ? "bg-bharat-blue/10 text-bharat-blue" : "bg-white/10 text-slate-400"
+                            )}>
+                              <MessageSquare size={14} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className={cn(
+                                "text-xs font-bold truncate",
+                                currentSessionId === session.id ? "text-slate-900" : "text-slate-600"
+                              )}>
+                                {session.title}
+                              </div>
+                              <div className="text-[9px] text-slate-400 mt-0.5">
+                                {session.timestamp.toLocaleDateString()}
+                              </div>
+                            </div>
+                            <button
+                              onClick={(e) => deleteSession(e, session.id)}
+                              className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 hover:text-red-500 rounded-lg transition-all text-slate-400"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ) : (
+                    <div className="text-center py-8">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No history yet</div>
+                    </div>
+                  )
+                ) : (
+                  <div className="p-6 rounded-2xl bg-bharat-blue/5 border border-bharat-blue/10 text-center">
+                    <UserIcon size={24} className="mx-auto text-bharat-blue/30 mb-3" />
+                    <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-tight">
+                      Sign in to save your chat history securely
+                    </div>
+                  </div>
+                )}
+
                 <section>
-                  <h3 className="text-[10px] font-black text-bharat-saffron uppercase tracking-[0.2em] mb-4">Language Preferences</h3>
+                  <h3 className="text-[10px] font-black text-bharat-saffron uppercase tracking-[0.2em] mb-4">Available Languages</h3>
                   <div className="grid grid-cols-2 gap-2">
                     {BHARAT_LANGUAGES.map((l, i) => (
                       <button
@@ -465,12 +934,25 @@ export default function App() {
                   "prose prose-sm max-w-none relative",
                   message.role === 'user' ? "prose-slate inline-block text-left bg-bharat-blue/5 px-4 py-2 rounded-2xl border border-bharat-blue/10" : "prose-slate"
                 )}>
-                  {message.role === 'assistant' && message.detectedLanguage && (
-                    <div className="flex items-center gap-1.5 mb-2">
-                      <div className="px-2 py-0.5 rounded-full bg-bharat-blue/10 border border-bharat-blue/20 flex items-center gap-1">
-                        <Languages size={10} className="text-bharat-blue" />
-                        <span className="text-[9px] font-bold text-bharat-blue uppercase tracking-wider">Detected: {message.detectedLanguage}</span>
-                      </div>
+                  {message.role === 'assistant' && (
+                    <div className="flex items-center gap-2 mb-2">
+                      {message.detectedLanguage && (
+                        <div className="px-2 py-0.5 rounded-full bg-bharat-blue/10 border border-bharat-blue/20 flex items-center gap-1">
+                          <Languages size={10} className="text-bharat-blue" />
+                          <span className="text-[9px] font-bold text-bharat-blue uppercase tracking-wider">Detected: {message.detectedLanguage}</span>
+                        </div>
+                      )}
+                      <button
+                        onClick={() => playTTS(message.id, message.content)}
+                        className={cn(
+                          "p-1.5 rounded-full transition-all",
+                          isPlaying === message.id 
+                            ? "bg-bharat-blue text-white animate-pulse" 
+                            : "bg-slate-100 text-slate-400 hover:bg-bharat-blue/10 hover:text-bharat-blue"
+                        )}
+                      >
+                        {isPlaying === message.id ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                      </button>
                     </div>
                   )}
                   <ReactMarkdown>{message.content}</ReactMarkdown>
@@ -580,7 +1062,7 @@ export default function App() {
           </div>
           <div className="flex items-center gap-1.5 text-[10px] font-black tracking-[0.2em] uppercase">
             <span className="text-slate-400">Made by</span>
-            <span className="text-bharat-green">Bharatiya</span>
+            <span className="text-white">Bharatiya</span>
           </div>
         </div>
       </footer>

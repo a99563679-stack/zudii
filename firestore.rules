@@ -1,0 +1,131 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}
+    // Document ID: userId (Firebase Auth UID)
+    // Fields:
+    //   - uid: string (required) - User's unique ID
+    //   - displayName: string (optional) - User's name
+    //   - email: string (required) - User's email
+    //   - photoURL: string (optional) - User's photo URL
+    //   - role: string (required) - 'user' or 'admin'
+    //   - createdAt: timestamp (optional) - When the profile was created
+    //
+    // Collection: /users/{userId}/sessions/{sessionId}
+    // Document ID: sessionId
+    // Fields:
+    //   - id: string (required) - Session ID
+    //   - userId: string (required) - Owner's UID
+    //   - title: string (required) - Chat title
+    //   - timestamp: timestamp (required) - Creation/Update time
+    //
+    // Collection: /users/{userId}/sessions/{sessionId}/messages/{messageId}
+    // Document ID: messageId
+    // Fields:
+    //   - id: string (required) - Message ID
+    //   - sessionId: string (required) - Parent session ID
+    //   - role: string (required) - 'user' or 'assistant'
+    //   - content: string (required) - Message text
+    //   - timestamp: timestamp (required) - Message time
+    //   - detectedLanguage: string (optional) - Detected language
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "a99563679@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'email', 'role']) &&
+             data.uid is string && data.uid.size() > 0 &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['user', 'admin'] &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 500));
+    }
+
+    function isValidSession(data) {
+      return hasRequiredFields(['id', 'userId', 'title', 'timestamp']) &&
+             data.id is string && data.id.size() > 0 &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 500 &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidMessage(data) {
+      return hasRequiredFields(['id', 'sessionId', 'role', 'content', 'timestamp']) &&
+             data.id is string && data.id.size() > 0 &&
+             data.sessionId is string && data.sessionId.size() > 0 &&
+             data.role in ['user', 'assistant'] &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 10000 &&
+             data.timestamp is timestamp &&
+             (!('detectedLanguage' in data) || (data.detectedLanguage is string && data.detectedLanguage.size() < 100));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      (request.resource.data.role == 'user' || isAdmin());
+      
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      (request.resource.data.role == resource.data.role || isAdmin());
+
+      match /sessions/{sessionId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if isOwner(userId) && isValidSession(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+
+        match /messages/{messageId} {
+          allow read: if isOwner(userId) || isAdmin();
+          allow create: if isOwner(userId) && isValidMessage(request.resource.data);
+          allow update: if false; // Messages are usually immutable
+          allow delete: if isOwner(userId) || isAdmin();
+        }
+      }
+    }
+  }
+}
