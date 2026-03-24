@@ -5,7 +5,20 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI } from "@google/genai";
-import { Send, Menu, MoreVertical, Sparkles, Languages, Info, X, Leaf, FileText, BookOpen } from 'lucide-react';
+import { 
+  Send, 
+  Menu, 
+  MoreVertical, 
+  Sparkles, 
+  Languages, 
+  Info, 
+  X, 
+  Leaf, 
+  FileText, 
+  BookOpen,
+  Paperclip,
+  File
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -65,6 +78,8 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<{ name: string, type: string, data: string }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
@@ -82,30 +97,85 @@ export default function App() {
     scrollToBottom();
   }, [messages]);
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64 = event.target?.result as string;
+        setAttachedFiles(prev => [...prev, {
+          name: file.name,
+          type: file.type,
+          data: base64
+        }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeFile = (index: number) => {
+    setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && attachedFiles.length === 0) || isLoading) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input,
+      content: input + (attachedFiles.length > 0 ? `\n\n[Attached Files: ${attachedFiles.map(f => f.name).join(', ')}]` : ''),
       timestamp: new Date(),
     };
 
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
+    const currentFiles = [...attachedFiles];
+    setAttachedFiles([]);
     setIsLoading(true);
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const chat = ai.chats.create({
-        model: "gemini-3-flash-preview",
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-        },
+      
+      const contents = [];
+      
+      // Add previous messages for context
+      messages.forEach(msg => {
+        contents.push({
+          role: msg.role === 'user' ? 'user' : 'model',
+          parts: [{ text: msg.content }]
+        });
       });
 
-      const response = await chat.sendMessage({ message: input });
+      // Add current message with files
+      const currentParts: any[] = [{ text: input }];
+      
+      currentFiles.forEach(file => {
+        const [mimeType, base64Data] = file.data.split(';base64,');
+        currentParts.push({
+          inlineData: {
+            mimeType: file.type || 'application/octet-stream',
+            data: base64Data
+          }
+        });
+      });
+
+      contents.push({
+        role: 'user',
+        parts: currentParts
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: contents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION
+        }
+      });
       
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -346,32 +416,66 @@ export default function App() {
 
       {/* Input Area */}
       <footer className="p-6 z-10 flex flex-col items-center gap-6">
-        <div className="w-full max-w-2xl flex items-center gap-4">
-          <div className="flex-1 glass-card rounded-full px-6 py-4 flex items-center gap-4 shadow-lg">
-            <button className="text-slate-400 hover:text-bharat-blue transition-colors">
-              <MoreVertical size={20} />
+        <div className="w-full max-w-2xl flex flex-col gap-4">
+          {attachedFiles.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-2">
+              <AnimatePresence>
+                {attachedFiles.map((file, idx) => (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    className="flex items-center gap-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-xl px-3 py-2 text-[10px] font-bold text-slate-700"
+                  >
+                    <File size={14} className="text-bharat-blue" />
+                    <span className="max-w-[100px] truncate">{file.name}</span>
+                    <button onClick={() => removeFile(idx)} className="hover:text-red-500 transition-colors">
+                      <X size={14} />
+                    </button>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
+
+          <div className="flex items-center gap-4">
+            <div className="flex-1 glass-card rounded-full px-6 py-4 flex items-center gap-4 shadow-lg">
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileChange} 
+                className="hidden" 
+                multiple 
+              />
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-slate-400 hover:text-bharat-blue transition-colors"
+              >
+                <Paperclip size={20} />
+              </button>
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                placeholder="Type your message..."
+                className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 font-medium"
+              />
+            </div>
+            <button
+              onClick={handleSend}
+              disabled={(!input.trim() && attachedFiles.length === 0) || isLoading}
+              className={cn(
+                "w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-xl",
+                (!input.trim() && attachedFiles.length === 0) || isLoading
+                  ? "bg-white/50 text-slate-300 cursor-not-allowed"
+                  : "bg-white text-bharat-blue hover:scale-105 active:scale-95"
+              )}
+            >
+              <Send size={28} className="rotate-[-15deg] translate-x-0.5" />
             </button>
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder="Type your message..."
-              className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 font-medium"
-            />
           </div>
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || isLoading}
-            className={cn(
-              "w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-xl",
-              !input.trim() || isLoading
-                ? "bg-white/50 text-slate-300 cursor-not-allowed"
-                : "bg-white text-bharat-blue hover:scale-105 active:scale-95"
-            )}
-          >
-            <Send size={28} className="rotate-[-15deg] translate-x-0.5" />
-          </button>
         </div>
 
         <div className="flex flex-col items-center gap-1">
