@@ -4,6 +4,7 @@
  */
 
 import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
+import { GoogleGenAI, Type } from "@google/genai";
 import { 
   Send, 
   Menu, 
@@ -25,6 +26,11 @@ import {
   LogIn,
   LogOut,
   User as UserIcon,
+  Volume2,
+  VolumeX,
+  Play,
+  Image as ImageIcon,
+  Video as VideoIcon,
   Loader2
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -56,6 +62,7 @@ import {
   addDoc,
   writeBatch
 } from 'firebase/firestore';
+import { Modality } from "@google/genai";
 
 declare global {
   interface Window {
@@ -74,9 +81,7 @@ interface Message {
   detectedLanguage?: string;
   imageUrl?: string;
   videoUrl?: string;
-  videoUri?: string;
   isGenerating?: boolean;
-  progress?: number;
 }
 
 interface ChatSession {
@@ -199,8 +204,28 @@ function BharatAIApp() {
   const [attachedFiles, setAttachedFiles] = useState<{ name: string, type: string, data: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isPlaying, setIsPlaying] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [hasApiKey, setHasApiKey] = useState(false);
 
-  const generateId = () => `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  useEffect(() => {
+    const checkApiKey = async () => {
+      if (window.aistudio?.hasSelectedApiKey) {
+        const selected = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(selected);
+      }
+    };
+    checkApiKey();
+  }, []);
+
+  const ensureApiKey = async () => {
+    if (window.aistudio?.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      setHasApiKey(true);
+      return true;
+    }
+    return false;
+  };
   
   useEffect(() => {
     const interval = setInterval(() => {
@@ -336,6 +361,52 @@ function BharatAIApp() {
       await signOut(auth);
     } catch (error) {
       console.error("Logout failed:", error);
+    }
+  };
+
+  const playTTS = async (messageId: string, text: string) => {
+    if (isPlaying === messageId) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        setIsPlaying(null);
+      }
+      return;
+    }
+
+    setIsPlaying(messageId);
+    try {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: `Speak this clearly: ${text}` }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' },
+            },
+          },
+        },
+      });
+
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        const audioUrl = `data:audio/mp3;base64,${base64Audio}`;
+        if (audioRef.current) {
+          audioRef.current.src = audioUrl;
+          audioRef.current.play();
+          audioRef.current.onended = () => setIsPlaying(null);
+        } else {
+          const audio = new Audio(audioUrl);
+          audioRef.current = audio;
+          audio.play();
+          audio.onended = () => setIsPlaying(null);
+        }
+      }
+    } catch (error) {
+      console.error("TTS Error:", error);
+      setIsPlaying(null);
     }
   };
 
@@ -533,7 +604,7 @@ function BharatAIApp() {
     }
 
     const userMessage: Message = {
-      id: generateId(),
+      id: Date.now().toString(),
       role: 'user',
       content: input + (attachedFiles.length > 0 ? `\n\n[Attached Files: ${attachedFiles.map(f => f.name).join(', ')}]` : ''),
       timestamp: new Date(),
@@ -558,39 +629,73 @@ function BharatAIApp() {
     setIsLoading(true);
 
     try {
-      let responseData;
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const ai = new GoogleGenAI({ apiKey });
 
-      const response = await fetch('/api/chat/sambanova', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            { role: 'system', content: SYSTEM_INSTRUCTION + "\n\nIMPORTANT: You MUST respond in JSON format with the following structure: { \"detectedLanguage\": \"string (e.g., Hindi, English, Hinglish)\", \"response\": \"string (your actual response)\" }" },
-            ...newMessages.slice(-10).map(m => ({
-              role: m.role === 'user' ? 'user' : 'assistant',
-              content: m.content
-            }))
-          ]
-        })
-      });
+      // Check for image/video generation intent
+      const lowerInput = input.toLowerCase();
+      const isImageRequest = lowerInput.includes('generate image') || lowerInput.includes('create image') || lowerInput.includes('draw') || lowerInput.includes('picture of');
+      const isVideoRequest = lowerInput.includes('generate video') || lowerInput.includes('create video') || lowerInput.includes('make a video');
 
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "SambaNova API Error");
+      if (isImageRequest) {
+        await handleGenerateImage(input, activeSessionId);
+        return;
       }
 
-      const data = await response.json();
-      const text = data.choices[0].message.content;
+      if (isVideoRequest) {
+        await handleGenerateVideo(input, activeSessionId);
+        return;
+      }
+      
+      const finalContents = [];
+      newMessages.slice(-10).forEach(msg => { // Limit context to last 10 messages
+        finalContents.push({
+          role: msg.role === 'user' ? 'user' : 'model',
+          parts: [{ text: msg.content }]
+        });
+      });
+
+      // Handle files in the last message
+      if (currentFiles.length > 0) {
+        const lastParts: any[] = [{ text: input }];
+        currentFiles.forEach(file => {
+          const [_, base64Data] = file.data.split(';base64,');
+          lastParts.push({
+            inlineData: {
+              mimeType: file.type || 'application/octet-stream',
+              data: base64Data
+            }
+          });
+        });
+        finalContents[finalContents.length - 1].parts = lastParts;
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: finalContents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION + "\n\nIMPORTANT: You MUST respond in JSON format with the following structure: { \"detectedLanguage\": \"string (e.g., Hindi, English, Hinglish)\", \"response\": \"string (your actual response)\" }",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              detectedLanguage: { type: Type.STRING },
+              response: { type: Type.STRING }
+            },
+            required: ["detectedLanguage", "response"]
+          }
+        }
+      });
+      
+      let responseData;
       try {
-        // SambaNova might return markdown blocks, clean them
-        const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
-        responseData = JSON.parse(cleanText);
+        responseData = JSON.parse(response.text || "{}");
       } catch (e) {
-        responseData = { response: text, detectedLanguage: "Unknown" };
+        responseData = { response: response.text, detectedLanguage: "Unknown" };
       }
 
       const assistantMessage: Message = {
-        id: generateId(),
+        id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: responseData.response || "I'm sorry, I couldn't process that.",
         timestamp: new Date(),
@@ -608,11 +713,138 @@ function BharatAIApp() {
         setMessages((prev) => [...prev, assistantMessage]);
       }
     } catch (error) {
-      console.error("Error calling SambaNova API:", error);
+      console.error("Error calling Gemini API:", error);
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: "I encountered an error while processing your request. Please try again.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGenerateImage = async (prompt: string, sessionId: string | null) => {
+    try {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const ai = new GoogleGenAI({ apiKey });
+      
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: {
+          parts: [{ text: prompt }]
+        },
+        config: {
+          imageConfig: {
+            aspectRatio: "1:1"
+          }
+        }
+      });
+
+      let imageUrl = '';
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+          break;
+        }
+      }
+
+      const assistantMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: `I have generated this image for you based on: "${prompt}"`,
+        timestamp: new Date(),
+        imageUrl
+      };
+
+      if (user && sessionId) {
+        const msgRef = doc(db, 'users', user.uid, 'sessions', sessionId, 'messages', assistantMessage.id);
+        await setDoc(msgRef, {
+          ...assistantMessage,
+          sessionId,
+          timestamp: Timestamp.fromDate(assistantMessage.timestamp)
+        });
+      } else {
+        setMessages((prev) => [...prev, assistantMessage]);
+      }
+    } catch (error) {
+      console.error("Image Generation Error:", error);
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "I encountered an error while generating the image. Please try again.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGenerateVideo = async (prompt: string, sessionId: string | null) => {
+    if (!hasApiKey) {
+      const success = await ensureApiKey();
+      if (!success) return;
+    }
+
+    try {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const ai = new GoogleGenAI({ apiKey });
+      
+      let operation = await ai.models.generateVideos({
+        model: 'veo-3.1-fast-generate-preview',
+        prompt: prompt,
+        config: {
+          numberOfVideos: 1,
+          resolution: '720p',
+          aspectRatio: '16:9'
+        }
+      });
+
+      // Poll for completion
+      while (!operation.done) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        operation = await ai.operations.getVideosOperation({ operation: operation });
+      }
+
+      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+      if (downloadLink) {
+        const videoResponse = await fetch(downloadLink, {
+          method: 'GET',
+          headers: {
+            'x-goog-api-key': apiKey,
+          },
+        });
+        const blob = await videoResponse.blob();
+        const videoUrl = URL.createObjectURL(blob);
+
+        const assistantMessage: Message = {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: `I have created this video for you: "${prompt}"`,
+          timestamp: new Date(),
+          videoUrl
+        };
+
+        if (user && sessionId) {
+          const msgRef = doc(db, 'users', user.uid, 'sessions', sessionId, 'messages', assistantMessage.id);
+          await setDoc(msgRef, {
+            ...assistantMessage,
+            sessionId,
+            timestamp: Timestamp.fromDate(assistantMessage.timestamp)
+          });
+        } else {
+          setMessages((prev) => [...prev, assistantMessage]);
+        }
+      }
+    } catch (error) {
+      console.error("Video Generation Error:", error);
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "I encountered an error while generating the video. Please try again.",
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, errorMessage]);
@@ -981,56 +1213,49 @@ function BharatAIApp() {
                           <span className="text-[9px] font-bold text-bharat-blue uppercase tracking-wider">Detected: {message.detectedLanguage}</span>
                         </div>
                       )}
+                      <button
+                        onClick={() => playTTS(message.id, message.content)}
+                        className={cn(
+                          "p-1.5 rounded-full transition-all",
+                          isPlaying === message.id 
+                            ? "bg-bharat-blue text-white animate-pulse" 
+                            : "bg-slate-100 text-slate-400 hover:bg-bharat-blue/10 hover:text-bharat-blue"
+                        )}
+                      >
+                        {isPlaying === message.id ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                      </button>
                     </div>
                   )}
                   <ReactMarkdown>{message.content}</ReactMarkdown>
                   
-                  {message.isGenerating && (
-                    <div className="mt-4 flex flex-col items-center justify-center p-10 glass-card rounded-3xl border border-white/30 shadow-2xl bg-white/10 backdrop-blur-md overflow-hidden relative">
-                      {/* Background Glows */}
-                      <div className="absolute top-0 left-1/4 w-32 h-32 bg-bharat-saffron/20 blur-[60px] rounded-full animate-pulse" />
-                      <div className="absolute bottom-0 right-1/4 w-32 h-32 bg-bharat-green/20 blur-[60px] rounded-full animate-pulse [animation-delay:1s]" />
-                      
-                      <div className="relative z-10 flex flex-col items-center">
-                        <div className="w-16 h-16 mb-6 relative">
-                          <AshokaChakra className="w-full h-full text-bharat-blue" spin />
-                          <motion.div 
-                            animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
-                            transition={{ duration: 2, repeat: Infinity }}
-                            className="absolute inset-0 bg-bharat-blue/10 blur-xl rounded-full"
-                          />
-                        </div>
-                        
-                        <div className="space-y-4 text-center w-full max-w-[200px]">
-                          <p className="text-[11px] font-black text-slate-700 uppercase tracking-[0.2em] animate-pulse">
-                            {message.imageUrl ? "Bharat AI is painting your imagination..." : "Bharat AI is crafting your cinematic vision..."}
-                          </p>
-                          
-                          {message.progress !== undefined && (
-                            <div className="space-y-2">
-                              <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden border border-white/20">
-                                <motion.div 
-                                  initial={{ width: 0 }}
-                                  animate={{ width: `${message.progress}%` }}
-                                  className="h-full bg-gradient-to-r from-bharat-saffron via-white to-bharat-green"
-                                />
-                              </div>
-                              <p className="text-[9px] font-bold text-bharat-blue uppercase tracking-widest">
-                                {message.progress}% Complete
-                              </p>
-                            </div>
-                          )}
-
-                          <div className="flex justify-center gap-1.5">
-                            <span className="w-1 h-1 bg-bharat-saffron rounded-full animate-bounce [animation-delay:-0.3s]" />
-                            <span className="w-1 h-1 bg-white rounded-full animate-bounce [animation-delay:-0.15s]" />
-                            <span className="w-1 h-1 bg-bharat-green rounded-full animate-bounce" />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                  {message.imageUrl && (
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="mt-4 rounded-2xl overflow-hidden border border-white/20 shadow-lg"
+                    >
+                      <img 
+                        src={message.imageUrl} 
+                        alt="Generated AI Art" 
+                        className="w-full h-auto object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    </motion.div>
                   )}
 
+                  {message.videoUrl && (
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="mt-4 rounded-2xl overflow-hidden border border-white/20 shadow-lg bg-black aspect-video flex items-center justify-center"
+                    >
+                      <video 
+                        src={message.videoUrl} 
+                        controls 
+                        className="w-full h-full"
+                      />
+                    </motion.div>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -1084,6 +1309,29 @@ function BharatAIApp() {
 
           <div className="flex items-center gap-2 md:gap-4">
             <div className="flex-1 glass-card rounded-full px-4 py-2.5 md:px-6 md:py-4 flex items-center gap-2 md:gap-4 shadow-lg">
+              <div className="relative group">
+                <button 
+                  className="text-slate-400 hover:text-bharat-saffron transition-colors"
+                >
+                  <Sparkles className="size-4 md:size-5" />
+                </button>
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 hidden group-hover:flex flex-col gap-2 bg-white rounded-2xl p-2 shadow-2xl border border-slate-100 min-w-[140px]">
+                  <button 
+                    onClick={() => setInput("Generate an image of ")}
+                    className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl text-[10px] font-black text-slate-600 uppercase tracking-wider transition-colors"
+                  >
+                    <ImageIcon size={14} className="text-bharat-saffron" />
+                    Image
+                  </button>
+                  <button 
+                    onClick={() => setInput("Generate a video of ")}
+                    className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl text-[10px] font-black text-slate-600 uppercase tracking-wider transition-colors"
+                  >
+                    <VideoIcon size={14} className="text-bharat-blue" />
+                    Video
+                  </button>
+                </div>
+              </div>
               <input 
                 type="file" 
                 ref={fileInputRef} 
