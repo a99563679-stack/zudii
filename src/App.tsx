@@ -163,6 +163,7 @@ export default function App() {
 function BharatAIApp() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [langIndex, setLangIndex] = useState(0);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -196,7 +197,9 @@ function BharatAIApp() {
 
   // Auth state listener
   useEffect(() => {
+    console.log("Setting up auth listener...");
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      console.log("Auth state changed:", firebaseUser ? firebaseUser.email : "No user");
       setUser(firebaseUser);
       setIsAuthReady(true);
       
@@ -228,8 +231,16 @@ function BharatAIApp() {
     });
 
     // Handle redirect result
-    getRedirectResult(auth).catch((error) => {
+    console.log("Checking for redirect result...");
+    getRedirectResult(auth).then((result) => {
+      if (result?.user) {
+        console.log("Redirect login successful", result.user.email);
+      } else {
+        console.log("No redirect result found");
+      }
+    }).catch((error: any) => {
       console.error("Redirect login failed:", error);
+      setLoginError(error.message || "Redirect login failed");
     });
 
     return () => unsubscribe();
@@ -297,10 +308,13 @@ function BharatAIApp() {
   }, [user, currentSessionId]);
 
   const handleLogin = async () => {
+    console.log("Login button clicked");
+    setLoginError("Redirecting to Google...");
     try {
       await signInWithRedirect(auth, googleProvider);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login failed:", error);
+      setLoginError(error.message || "Login failed to start");
     }
   };
 
@@ -717,13 +731,25 @@ function BharatAIApp() {
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={handleLogin}
-                  className="w-full py-3 px-4 rounded-2xl bg-white border border-bharat-blue/20 text-bharat-blue font-black text-sm flex items-center justify-center gap-2 shadow-md hover:bg-slate-50 transition-all"
-                >
-                  <LogIn size={18} />
-                  Sign In with Google
-                </button>
+                <div className="space-y-3">
+                  <button
+                    onClick={handleLogin}
+                    className="w-full py-3 px-4 rounded-2xl bg-white border border-bharat-blue/20 text-bharat-blue font-black text-sm flex items-center justify-center gap-2 shadow-md hover:bg-slate-50 transition-all"
+                  >
+                    <LogIn size={18} />
+                    Sign In with Google
+                  </button>
+                  {loginError && (
+                    <div className="p-3 rounded-xl bg-red-50 border border-red-100 text-[10px] text-red-600 font-bold break-words">
+                      Error: {loginError}
+                    </div>
+                  )}
+                  {!isAuthReady && (
+                    <div className="text-center text-[9px] text-slate-400 font-bold animate-pulse">
+                      Initializing Auth...
+                    </div>
+                  )}
+                </div>
               )}
 
               <button
