@@ -5,7 +5,6 @@
 
 import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, useMemo } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
-import Groq from "groq-sdk";
 import { 
   Send, 
   Menu, 
@@ -55,6 +54,7 @@ import {
   getDoc, 
   getDocs, 
   query, 
+  where,
   orderBy, 
   onSnapshot, 
   deleteDoc,
@@ -647,30 +647,43 @@ function BharatAIApp() {
 
     try {
       if (modeIsImage) {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-          throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
-        }
-        const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash-image',
-          contents: {
-            parts: [{ text: textToSend }],
-          },
-        });
-
+        // Check cache
+        const cacheRef = collection(db, 'image_cache');
+        const q = query(cacheRef, where('prompt', '==', textToSend));
+        const querySnapshot = await getDocs(q);
+        
         let imageUrl = '';
-        const parts = response.candidates?.[0]?.content?.parts || [];
-        for (const part of parts) {
-          if (part.inlineData) {
-            const base64EncodeString = part.inlineData.data;
-            const mimeType = part.inlineData.mimeType || 'image/png';
-            imageUrl = `data:${mimeType};base64,${base64EncodeString}`;
-            break;
+        if (!querySnapshot.empty) {
+          imageUrl = querySnapshot.docs[0].data().imageUrl;
+          console.log("Using cached image");
+        } else {
+          const apiKey = process.env.GEMINI_API_KEY;
+          if (!apiKey) {
+            throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
           }
-        }
+          const ai = new GoogleGenAI({ apiKey });
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+              parts: [{ text: textToSend }],
+            },
+          });
 
-        if (!imageUrl) throw new Error("Failed to generate image.");
+          const parts = response.candidates?.[0]?.content?.parts || [];
+          for (const part of parts) {
+            if (part.inlineData) {
+              const base64EncodeString = part.inlineData.data;
+              const mimeType = part.inlineData.mimeType || 'image/png';
+              imageUrl = `data:${mimeType};base64,${base64EncodeString}`;
+              break;
+            }
+          }
+
+          if (!imageUrl) throw new Error("Failed to generate image.");
+          
+          // Store in cache
+          await addDoc(cacheRef, { prompt: textToSend, imageUrl: imageUrl, timestamp: Timestamp.now() });
+        }
 
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
@@ -691,42 +704,57 @@ function BharatAIApp() {
           setMessages((prev) => [...prev, assistantMessage]);
         }
       } else {
-        const groqApiKey = process.env.GROQ_API_KEY;
-        if (!groqApiKey) {
-          throw new Error("Groq API key is missing. Please add it to your secrets in the AI Studio settings.");
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
         }
-        const groq = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
+        const ai = new GoogleGenAI({ apiKey });
         
-        const groqMessages: any[] = [
-          { role: "system", content: SYSTEM_INSTRUCTION + "\n\nIMPORTANT: You MUST respond in JSON format with the following structure: { \"detectedLanguage\": \"string (e.g., Hindi, English, Hinglish)\", \"response\": \"string (your actual response)\" }" },
-          ...newMessages.slice(-10).map(msg => ({
-            role: msg.role === 'user' ? 'user' : 'assistant',
-            content: msg.content
-          }))
-        ];
+        const contents: any[] = newMessages.slice(-10).map(msg => ({
+          role: msg.role === 'user' ? 'user' : 'model',
+          parts: [{ text: msg.content }]
+        }));
 
         // Handle images in the last message if any
         if (currentFiles.length > 0) {
-          const lastUserMsg = groqMessages[groqMessages.length - 1];
-          const content: any[] = [{ type: "text", text: lastUserMsg.content as string }];
+          const lastUserMsg = contents[contents.length - 1];
           currentFiles.forEach(file => {
             if (file.type.startsWith('image/')) {
-              content.push({
-                type: "image_url",
-                image_url: { url: file.data }
+              const base64Data = file.data.split(',')[1];
+              lastUserMsg.parts.push({
+                inlineData: {
+                  mimeType: file.type,
+                  data: base64Data
+                }
               });
             }
           });
-          lastUserMsg.content = content;
         }
 
-        const completion = await groq.chat.completions.create({
-          messages: groqMessages,
-          model: currentFiles.some(f => f.type.startsWith('image/')) ? "llama-3.2-11b-vision-preview" : "llama-3.3-70b-versatile",
-          response_format: { type: "json_object" }
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: contents,
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                detectedLanguage: {
+                  type: Type.STRING,
+                  description: "The language detected in the user's input (e.g., Hindi, English, Hinglish)"
+                },
+                response: {
+                  type: Type.STRING,
+                  description: "Your actual response to the user"
+                }
+              },
+              required: ["detectedLanguage", "response"]
+            }
+          }
         });
 
-        const responseText = completion.choices[0]?.message?.content || "{}";
+        const responseText = response.text || "{}";
         let responseData;
         try {
           responseData = JSON.parse(responseText);
