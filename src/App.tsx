@@ -38,8 +38,7 @@ import {
   auth, 
   db, 
   googleProvider, 
-  signInWithRedirect,
-  getRedirectResult,
+  signInWithPopup,
   signOut, 
   onAuthStateChanged, 
   FirebaseUser,
@@ -230,19 +229,7 @@ function BharatAIApp() {
       }
     });
 
-    // Handle redirect result
-    console.log("Checking for redirect result...");
-    getRedirectResult(auth).then((result) => {
-      if (result?.user) {
-        console.log("Redirect login successful", result.user.email);
-      } else {
-        console.log("No redirect result found");
-      }
-    }).catch((error: any) => {
-      console.error("Redirect login failed:", error);
-      setLoginError(error.message || "Redirect login failed");
-    });
-
+    // Remove getRedirectResult logic as we are switching to signInWithPopup
     return () => unsubscribe();
   }, []);
 
@@ -309,12 +296,22 @@ function BharatAIApp() {
 
   const handleLogin = async () => {
     console.log("Login button clicked");
-    setLoginError("Redirecting to Google...");
+    setLoginError("Opening Google login...");
     try {
-      await signInWithRedirect(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      if (result.user) {
+        console.log("Popup login successful", result.user.email);
+        setLoginError(null);
+      }
     } catch (error: any) {
       console.error("Login failed:", error);
-      setLoginError(error.message || "Login failed to start");
+      if (error.code === 'auth/unauthorized-domain') {
+        setLoginError(`Domain not authorized. Please add "${window.location.hostname}" to Firebase Authorized Domains.`);
+      } else if (error.code === 'auth/popup-blocked') {
+        setLoginError("Login popup was blocked. Please allow popups for this site.");
+      } else {
+        setLoginError(error.message || "Login failed to start");
+      }
     }
   };
 
