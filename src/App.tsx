@@ -601,7 +601,7 @@ function BharatAIApp() {
         await setDoc(sessionRef, {
           id: activeSessionId,
           userId: user.uid,
-          title: textToSend.slice(0, 30) || 'New Chat',
+          title: textToSend.trim().slice(0, 30) || (attachedFiles.length > 0 ? 'File Upload' : 'New Chat'),
           timestamp: Timestamp.now()
         });
         setCurrentSessionId(activeSessionId);
@@ -613,7 +613,7 @@ function BharatAIApp() {
       const session = sessions.find(s => s.id === activeSessionId);
       if (session && session.title === 'New Chat' && messages.length <= 1) {
         const sessionRef = doc(db, 'users', user.uid, 'sessions', activeSessionId);
-        setDoc(sessionRef, { title: textToSend.slice(0, 30) }, { merge: true })
+        setDoc(sessionRef, { title: textToSend.trim().slice(0, 30) || (attachedFiles.length > 0 ? 'File Upload' : 'New Chat') }, { merge: true })
           .catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/sessions/${activeSessionId}`));
       }
     }
@@ -647,43 +647,30 @@ function BharatAIApp() {
 
     try {
       if (modeIsImage) {
-        // Check cache
-        const cacheRef = collection(db, 'image_cache');
-        const q = query(cacheRef, where('prompt', '==', textToSend));
-        const querySnapshot = await getDocs(q);
-        
         let imageUrl = '';
-        if (!querySnapshot.empty) {
-          imageUrl = querySnapshot.docs[0].data().imageUrl;
-          console.log("Using cached image");
-        } else {
-          const apiKey = process.env.GEMINI_API_KEY;
-          if (!apiKey) {
-            throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
-          }
-          const ai = new GoogleGenAI({ apiKey });
-          const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: {
-              parts: [{ text: textToSend }],
-            },
-          });
-
-          const parts = response.candidates?.[0]?.content?.parts || [];
-          for (const part of parts) {
-            if (part.inlineData) {
-              const base64EncodeString = part.inlineData.data;
-              const mimeType = part.inlineData.mimeType || 'image/png';
-              imageUrl = `data:${mimeType};base64,${base64EncodeString}`;
-              break;
-            }
-          }
-
-          if (!imageUrl) throw new Error("Failed to generate image.");
-          
-          // Store in cache
-          await addDoc(cacheRef, { prompt: textToSend, imageUrl: imageUrl, timestamp: Timestamp.now() });
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
         }
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-image',
+          contents: {
+            parts: [{ text: textToSend }],
+          },
+        });
+
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.inlineData) {
+            const base64EncodeString = part.inlineData.data;
+            const mimeType = part.inlineData.mimeType || 'image/png';
+            imageUrl = `data:${mimeType};base64,${base64EncodeString}`;
+            break;
+          }
+        }
+
+        if (!imageUrl) throw new Error("Failed to generate image.");
 
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
@@ -767,7 +754,7 @@ function BharatAIApp() {
           role: 'assistant',
           content: responseData.response || "I'm sorry, I couldn't process that.",
           timestamp: new Date(),
-          detectedLanguage: responseData.detectedLanguage
+          ...(responseData.detectedLanguage ? { detectedLanguage: String(responseData.detectedLanguage) } : {})
         };
 
         if (user && activeSessionId) {
