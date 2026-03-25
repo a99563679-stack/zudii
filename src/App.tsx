@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, useMemo } from 'react';
+import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { 
   Send, 
@@ -196,27 +196,6 @@ function BharatAIApp() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isImageMode, setIsImageMode] = useState(false);
   
-  const allImages = useMemo(() => {
-    const images: { url: string, messageId: string, sessionId: string, prompt: string, timestamp: Date }[] = [];
-    sessions.forEach(session => {
-      session.messages.forEach((msg, idx) => {
-        if (msg.imageUrl) {
-          let prompt = "Generated Image";
-          if (idx > 0 && session.messages[idx - 1].role === 'user') {
-            prompt = session.messages[idx - 1].content;
-          }
-          images.push({
-            url: msg.imageUrl,
-            messageId: msg.id,
-            sessionId: session.id,
-            prompt,
-            timestamp: msg.timestamp
-          });
-        }
-      });
-    });
-    return images.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  }, [sessions]);
   useEffect(() => {
     const interval = setInterval(() => {
       setLangIndex((prev) => (prev + 1) % BHARAT_LANGUAGES.length);
@@ -580,11 +559,8 @@ function BharatAIApp() {
     }
   };
 
-  const handleSend = async (overrideInput?: string | any, overrideImageMode?: boolean | any) => {
-    const textToSend = typeof overrideInput === 'string' ? overrideInput : input;
-    const modeIsImage = typeof overrideImageMode === 'boolean' ? overrideImageMode : isImageMode;
-
-    if ((!textToSend.trim() && attachedFiles.length === 0) || (modeIsImage && !textToSend.trim()) || isLoading) return;
+  const handleSend = async () => {
+    if ((!input.trim() && attachedFiles.length === 0) || (isImageMode && !input.trim()) || isLoading) return;
 
     let activeSessionId = currentSessionId;
     
@@ -596,7 +572,7 @@ function BharatAIApp() {
         await setDoc(sessionRef, {
           id: activeSessionId,
           userId: user.uid,
-          title: textToSend.slice(0, 30) || 'New Chat',
+          title: input.slice(0, 30) || 'New Chat',
           timestamp: Timestamp.now()
         });
         setCurrentSessionId(activeSessionId);
@@ -608,7 +584,7 @@ function BharatAIApp() {
       const session = sessions.find(s => s.id === activeSessionId);
       if (session && session.title === 'New Chat' && messages.length <= 1) {
         const sessionRef = doc(db, 'users', user.uid, 'sessions', activeSessionId);
-        setDoc(sessionRef, { title: textToSend.slice(0, 30) }, { merge: true })
+        setDoc(sessionRef, { title: input.slice(0, 30) }, { merge: true })
           .catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/sessions/${activeSessionId}`));
       }
     }
@@ -616,7 +592,7 @@ function BharatAIApp() {
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: textToSend + (attachedFiles.length > 0 ? `\n\n[Attached Files: ${attachedFiles.map(f => f.name).join(', ')}]` : ''),
+      content: input + (attachedFiles.length > 0 ? `\n\n[Attached Files: ${attachedFiles.map(f => f.name).join(', ')}]` : ''),
       timestamp: new Date(),
     };
 
@@ -633,9 +609,7 @@ function BharatAIApp() {
       }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sessions/${activeSessionId}/messages/${userMessage.id}`));
     }
 
-    if (overrideInput === undefined) {
-      setInput('');
-    }
+    setInput('');
     const currentFiles = [...attachedFiles];
     setAttachedFiles([]);
     setIsLoading(true);
@@ -643,11 +617,11 @@ function BharatAIApp() {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
       
-      if (modeIsImage) {
+      if (isImageMode) {
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash-image',
           contents: {
-            parts: [{ text: textToSend }],
+            parts: [{ text: input }],
           },
         });
 
@@ -693,7 +667,7 @@ function BharatAIApp() {
 
         // Handle files in the last message
         if (currentFiles.length > 0) {
-          const lastParts: any[] = [{ text: textToSend }];
+          const lastParts: any[] = [{ text: input }];
           currentFiles.forEach(file => {
             const [_, base64Data] = file.data.split(';base64,');
             lastParts.push({
@@ -875,102 +849,63 @@ function BharatAIApp() {
               <div className="flex-1 overflow-y-auto space-y-8 pr-2 custom-scrollbar">
                 {user ? (
                   sessions.length > 0 ? (
-                    <div className="space-y-8">
-                      <section>
-                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Chat History</h3>
-                        <motion.div 
-                          initial="hidden"
-                          animate="show"
-                          variants={{
-                            show: {
-                              transition: {
-                                staggerChildren: 0.05
-                              }
+                    <section>
+                      <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Chat History</h3>
+                      <motion.div 
+                        initial="hidden"
+                        animate="show"
+                        variants={{
+                          show: {
+                            transition: {
+                              staggerChildren: 0.05
                             }
-                          }}
-                          className="space-y-2"
-                        >
-                          {sessions.map((session) => (
-                            <motion.div
-                              key={session.id}
-                              variants={{
-                                hidden: { opacity: 0, x: -10 },
-                                show: { opacity: 1, x: 0 }
-                              }}
-                              whileHover={{ x: 4 }}
-                              onClick={() => switchSession(session.id)}
-                              className={cn(
-                                "group relative flex items-center gap-3 p-3 rounded-2xl border transition-all cursor-pointer",
-                                currentSessionId === session.id
-                                  ? "bg-white border-bharat-blue/20 shadow-sm"
-                                  : "bg-white/5 border-transparent hover:bg-white/10"
-                              )}
-                            >
+                          }
+                        }}
+                        className="space-y-2"
+                      >
+                        {sessions.map((session) => (
+                          <motion.div
+                            key={session.id}
+                            variants={{
+                              hidden: { opacity: 0, x: -10 },
+                              show: { opacity: 1, x: 0 }
+                            }}
+                            whileHover={{ x: 4 }}
+                            onClick={() => switchSession(session.id)}
+                            className={cn(
+                              "group relative flex items-center gap-3 p-3 rounded-2xl border transition-all cursor-pointer",
+                              currentSessionId === session.id
+                                ? "bg-white border-bharat-blue/20 shadow-sm"
+                                : "bg-white/5 border-transparent hover:bg-white/10"
+                            )}
+                          >
+                            <div className={cn(
+                              "p-2 rounded-lg",
+                              currentSessionId === session.id ? "bg-bharat-blue/10 text-bharat-blue" : "bg-white/10 text-slate-400"
+                            )}>
+                              <MessageSquare size={14} />
+                            </div>
+                            <div className="flex-1 min-w-0">
                               <div className={cn(
-                                "p-2 rounded-lg",
-                                currentSessionId === session.id ? "bg-bharat-blue/10 text-bharat-blue" : "bg-white/10 text-slate-400"
+                                "text-xs font-bold truncate",
+                                currentSessionId === session.id ? "text-slate-900" : "text-slate-600"
                               )}>
-                                <MessageSquare size={14} />
+                                {session.title}
                               </div>
-                              <div className="flex-1 min-w-0">
-                                <div className={cn(
-                                  "text-xs font-bold truncate",
-                                  currentSessionId === session.id ? "text-slate-900" : "text-slate-600"
-                                )}>
-                                  {session.title}
-                                </div>
-                                <div className="text-[9px] text-slate-400 mt-0.5">
-                                  {session.timestamp.toLocaleDateString()}
-                                </div>
+                              <div className="text-[9px] text-slate-400 mt-0.5">
+                                {session.timestamp.toLocaleDateString()}
                               </div>
-                              <button
-                                onClick={(e) => deleteSession(e, session.id)}
-                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 hover:text-red-500 rounded-lg transition-all text-slate-400"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </motion.div>
-                          ))}
-                        </motion.div>
-                      </section>
-
-                      {allImages.length > 0 && (
-                        <section>
-                          <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Image History</h3>
-                          <div className="grid grid-cols-2 gap-2">
-                            {allImages.map((img) => (
-                              <div key={img.messageId} className="relative group rounded-xl overflow-hidden border border-white/10 aspect-square bg-black/10">
-                                <img src={img.url} alt={img.prompt} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2">
-                                  <div className="text-[8px] text-white font-medium line-clamp-2 leading-tight">
-                                    {img.prompt}
-                                  </div>
-                                  <div className="flex gap-1 justify-end">
-                                    <button 
-                                      onClick={() => handleDownloadImage(img.url, img.messageId)}
-                                      className="p-1.5 bg-white/20 hover:bg-white/40 rounded-lg text-white transition-colors"
-                                      title="Download"
-                                    >
-                                      <Download size={12} />
-                                    </button>
-                                    <button 
-                                      onClick={() => {
-                                        setIsSidebarOpen(false);
-                                        handleSend(img.prompt, true);
-                                      }}
-                                      className="p-1.5 bg-bharat-blue/80 hover:bg-bharat-blue rounded-lg text-white transition-colors"
-                                      title="Regenerate"
-                                    >
-                                      <Sparkles size={12} />
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </section>
-                      )}
-                    </div>
+                            </div>
+                            <button
+                              onClick={(e) => deleteSession(e, session.id)}
+                              className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 hover:text-red-500 rounded-lg transition-all text-slate-400"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </motion.div>
+                        ))}
+                      </motion.div>
+                    </section>
                   ) : (
                     <div className="text-center py-8">
                       <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No history yet</div>
@@ -1186,7 +1121,7 @@ function BharatAIApp() {
                       />
                       <button
                         onClick={() => handleDownloadImage(message.imageUrl!, message.id)}
-                        className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/80 text-white rounded-lg transition-all duration-200 shadow-sm backdrop-blur-sm"
+                        className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/70 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow-sm backdrop-blur-sm"
                         title="Download Image"
                       >
                         <Download size={16} />
