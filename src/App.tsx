@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode } from 'react';
+import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, useMemo } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
+import Groq from "groq-sdk";
 import { 
   Send, 
   Menu, 
@@ -196,6 +197,27 @@ function BharatAIApp() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isImageMode, setIsImageMode] = useState(false);
   
+  const allImages = useMemo(() => {
+    const images: { url: string, messageId: string, sessionId: string, prompt: string, timestamp: Date }[] = [];
+    sessions.forEach(session => {
+      session.messages.forEach((msg, idx) => {
+        if (msg.imageUrl) {
+          let prompt = "Generated Image";
+          if (idx > 0 && session.messages[idx - 1].role === 'user') {
+            prompt = session.messages[idx - 1].content;
+          }
+          images.push({
+            url: msg.imageUrl,
+            messageId: msg.id,
+            sessionId: session.id,
+            prompt,
+            timestamp: msg.timestamp
+          });
+        }
+      });
+    });
+    return images.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  }, [sessions]);
   useEffect(() => {
     const interval = setInterval(() => {
       setLangIndex((prev) => (prev + 1) % BHARAT_LANGUAGES.length);
@@ -345,7 +367,11 @@ function BharatAIApp() {
 
     setIsPlaying(messageId);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
+      }
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text: `Speak this clearly: ${text}` }] }],
@@ -373,7 +399,7 @@ function BharatAIApp() {
           audio.onended = () => setIsPlaying(null);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("TTS Error:", error);
       setIsPlaying(null);
     }
@@ -559,11 +585,11 @@ function BharatAIApp() {
     }
   };
 
-  const handleSend = async () => {
-    const currentInput = input.trim();
-    const currentFiles = [...attachedFiles];
-    
-    if ((!currentInput && currentFiles.length === 0) || (isImageMode && !currentInput) || isLoading) return;
+  const handleSend = async (overrideInput?: string | any, overrideImageMode?: boolean | any) => {
+    const textToSend = typeof overrideInput === 'string' ? overrideInput : input;
+    const modeIsImage = typeof overrideImageMode === 'boolean' ? overrideImageMode : isImageMode;
+
+    if ((!textToSend.trim() && attachedFiles.length === 0) || (modeIsImage && !textToSend.trim()) || isLoading) return;
 
     let activeSessionId = currentSessionId;
     
@@ -575,7 +601,7 @@ function BharatAIApp() {
         await setDoc(sessionRef, {
           id: activeSessionId,
           userId: user.uid,
-          title: currentInput.slice(0, 30) || 'New Chat',
+          title: textToSend.slice(0, 30) || 'New Chat',
           timestamp: Timestamp.now()
         });
         setCurrentSessionId(activeSessionId);
@@ -587,7 +613,7 @@ function BharatAIApp() {
       const session = sessions.find(s => s.id === activeSessionId);
       if (session && session.title === 'New Chat' && messages.length <= 1) {
         const sessionRef = doc(db, 'users', user.uid, 'sessions', activeSessionId);
-        setDoc(sessionRef, { title: currentInput.slice(0, 30) }, { merge: true })
+        setDoc(sessionRef, { title: textToSend.slice(0, 30) }, { merge: true })
           .catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/sessions/${activeSessionId}`));
       }
     }
@@ -595,7 +621,7 @@ function BharatAIApp() {
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: currentInput + (currentFiles.length > 0 ? `\n\n[Attached Files: ${currentFiles.map(f => f.name).join(', ')}]` : ''),
+      content: textToSend + (attachedFiles.length > 0 ? `\n\n[Attached Files: ${attachedFiles.map(f => f.name).join(', ')}]` : ''),
       timestamp: new Date(),
     };
 
@@ -612,30 +638,24 @@ function BharatAIApp() {
       }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sessions/${activeSessionId}/messages/${userMessage.id}`));
     }
 
-    setInput('');
+    if (overrideInput === undefined) {
+      setInput('');
+    }
+    const currentFiles = [...attachedFiles];
     setAttachedFiles([]);
     setIsLoading(true);
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      console.log("API Key check:", { 
-        exists: !!apiKey, 
-        isString: typeof apiKey === 'string',
-        length: apiKey?.length,
-        isPlaceholder: apiKey === "MY_GEMINI_API_KEY" || apiKey === "undefined"
-      });
-
-      if (!apiKey || apiKey === "undefined" || apiKey === "MY_GEMINI_API_KEY") {
-        throw new Error("Gemini API Key is missing or invalid. Please ensure you have configured 'GEMINI_API_KEY' in the 'Secrets' section of the Settings menu (top right).");
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
-      
-      if (isImageMode) {
+      if (modeIsImage) {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
+        }
+        const ai = new GoogleGenAI({ apiKey });
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash-image',
           contents: {
-            parts: [{ text: currentInput }],
+            parts: [{ text: textToSend }],
           },
         });
 
@@ -650,7 +670,7 @@ function BharatAIApp() {
           }
         }
 
-        if (!imageUrl) throw new Error("Failed to generate image. The model might have blocked the request or returned an empty response.");
+        if (!imageUrl) throw new Error("Failed to generate image.");
 
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
@@ -671,51 +691,47 @@ function BharatAIApp() {
           setMessages((prev) => [...prev, assistantMessage]);
         }
       } else {
-        const finalContents = [];
-        newMessages.slice(-10).forEach(msg => { // Limit context to last 10 messages
-          finalContents.push({
-            role: msg.role === 'user' ? 'user' : 'model',
-            parts: [{ text: msg.content }]
-          });
-        });
+        const groqApiKey = process.env.GROQ_API_KEY;
+        if (!groqApiKey) {
+          throw new Error("Groq API key is missing. Please add it to your secrets in the AI Studio settings.");
+        }
+        const groq = new Groq({ apiKey: groqApiKey, dangerouslyAllowBrowser: true });
+        
+        const groqMessages: any[] = [
+          { role: "system", content: SYSTEM_INSTRUCTION + "\n\nIMPORTANT: You MUST respond in JSON format with the following structure: { \"detectedLanguage\": \"string (e.g., Hindi, English, Hinglish)\", \"response\": \"string (your actual response)\" }" },
+          ...newMessages.slice(-10).map(msg => ({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content
+          }))
+        ];
 
-        // Handle files in the last message
+        // Handle images in the last message if any
         if (currentFiles.length > 0) {
-          const lastParts: any[] = [{ text: currentInput }];
+          const lastUserMsg = groqMessages[groqMessages.length - 1];
+          const content: any[] = [{ type: "text", text: lastUserMsg.content as string }];
           currentFiles.forEach(file => {
-            const [_, base64Data] = file.data.split(';base64,');
-            lastParts.push({
-              inlineData: {
-                mimeType: file.type || 'application/octet-stream',
-                data: base64Data
-              }
-            });
+            if (file.type.startsWith('image/')) {
+              content.push({
+                type: "image_url",
+                image_url: { url: file.data }
+              });
+            }
           });
-          finalContents[finalContents.length - 1].parts = lastParts;
+          lastUserMsg.content = content;
         }
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: finalContents,
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION + "\n\nIMPORTANT: You MUST respond in JSON format with the following structure: { \"detectedLanguage\": \"string (e.g., Hindi, English, Hinglish)\", \"response\": \"string (your actual response)\" }",
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                detectedLanguage: { type: Type.STRING },
-                response: { type: Type.STRING }
-              },
-              required: ["detectedLanguage", "response"]
-            }
-          }
+        const completion = await groq.chat.completions.create({
+          messages: groqMessages,
+          model: currentFiles.some(f => f.type.startsWith('image/')) ? "llama-3.2-11b-vision-preview" : "llama-3.3-70b-versatile",
+          response_format: { type: "json_object" }
         });
-        
+
+        const responseText = completion.choices[0]?.message?.content || "{}";
         let responseData;
         try {
-          responseData = JSON.parse(response.text || "{}");
+          responseData = JSON.parse(responseText);
         } catch (e) {
-          responseData = { response: response.text, detectedLanguage: "Unknown" };
+          responseData = { response: responseText, detectedLanguage: "Unknown" };
         }
 
         const assistantMessage: Message = {
@@ -738,24 +754,24 @@ function BharatAIApp() {
         }
       }
     } catch (error: any) {
-      console.error("Error calling Gemini API:", error);
-      const assistantMessage: Message = {
+      console.error("Error calling AI API:", error);
+      
+      let errorContent = "I encountered an error while processing your request. Please try again.";
+      
+      // Check for quota exceeded error (429)
+      if (error?.message?.includes('429') || error?.status === 429 || JSON.stringify(error).includes('429')) {
+        errorContent = "Namaste! It seems I've reached my daily limit. Please try again tomorrow or check your API quota in the AI Studio settings.";
+      } else if (error?.message) {
+        errorContent = `I encountered an error: ${error.message}. Please ensure your API keys are valid and try again.`;
+      }
+
+      const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `I encountered an error: ${error.message || "Unknown error"}. Please ensure your API key is valid and try again.`,
+        content: errorContent,
         timestamp: new Date(),
       };
-      
-      if (user && activeSessionId) {
-        const msgRef = doc(db, 'users', user.uid, 'sessions', activeSessionId, 'messages', assistantMessage.id);
-        setDoc(msgRef, {
-          ...assistantMessage,
-          sessionId: activeSessionId,
-          timestamp: Timestamp.fromDate(assistantMessage.timestamp)
-        }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sessions/${activeSessionId}/messages/${assistantMessage.id}`));
-      } else {
-        setMessages((prev) => [...prev, assistantMessage]);
-      }
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
@@ -873,63 +889,102 @@ function BharatAIApp() {
               <div className="flex-1 overflow-y-auto space-y-8 pr-2 custom-scrollbar">
                 {user ? (
                   sessions.length > 0 ? (
-                    <section>
-                      <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Chat History</h3>
-                      <motion.div 
-                        initial="hidden"
-                        animate="show"
-                        variants={{
-                          show: {
-                            transition: {
-                              staggerChildren: 0.05
+                    <div className="space-y-8">
+                      <section>
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Chat History</h3>
+                        <motion.div 
+                          initial="hidden"
+                          animate="show"
+                          variants={{
+                            show: {
+                              transition: {
+                                staggerChildren: 0.05
+                              }
                             }
-                          }
-                        }}
-                        className="space-y-2"
-                      >
-                        {sessions.map((session) => (
-                          <motion.div
-                            key={session.id}
-                            variants={{
-                              hidden: { opacity: 0, x: -10 },
-                              show: { opacity: 1, x: 0 }
-                            }}
-                            whileHover={{ x: 4 }}
-                            onClick={() => switchSession(session.id)}
-                            className={cn(
-                              "group relative flex items-center gap-3 p-3 rounded-2xl border transition-all cursor-pointer",
-                              currentSessionId === session.id
-                                ? "bg-white border-bharat-blue/20 shadow-sm"
-                                : "bg-white/5 border-transparent hover:bg-white/10"
-                            )}
-                          >
-                            <div className={cn(
-                              "p-2 rounded-lg",
-                              currentSessionId === session.id ? "bg-bharat-blue/10 text-bharat-blue" : "bg-white/10 text-slate-400"
-                            )}>
-                              <MessageSquare size={14} />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className={cn(
-                                "text-xs font-bold truncate",
-                                currentSessionId === session.id ? "text-slate-900" : "text-slate-600"
-                              )}>
-                                {session.title}
-                              </div>
-                              <div className="text-[9px] text-slate-400 mt-0.5">
-                                {session.timestamp.toLocaleDateString()}
-                              </div>
-                            </div>
-                            <button
-                              onClick={(e) => deleteSession(e, session.id)}
-                              className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 hover:text-red-500 rounded-lg transition-all text-slate-400"
+                          }}
+                          className="space-y-2"
+                        >
+                          {sessions.map((session) => (
+                            <motion.div
+                              key={session.id}
+                              variants={{
+                                hidden: { opacity: 0, x: -10 },
+                                show: { opacity: 1, x: 0 }
+                              }}
+                              whileHover={{ x: 4 }}
+                              onClick={() => switchSession(session.id)}
+                              className={cn(
+                                "group relative flex items-center gap-3 p-3 rounded-2xl border transition-all cursor-pointer",
+                                currentSessionId === session.id
+                                  ? "bg-white border-bharat-blue/20 shadow-sm"
+                                  : "bg-white/5 border-transparent hover:bg-white/10"
+                              )}
                             >
-                              <Trash2 size={14} />
-                            </button>
-                          </motion.div>
-                        ))}
-                      </motion.div>
-                    </section>
+                              <div className={cn(
+                                "p-2 rounded-lg",
+                                currentSessionId === session.id ? "bg-bharat-blue/10 text-bharat-blue" : "bg-white/10 text-slate-400"
+                              )}>
+                                <MessageSquare size={14} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className={cn(
+                                  "text-xs font-bold truncate",
+                                  currentSessionId === session.id ? "text-slate-900" : "text-slate-600"
+                                )}>
+                                  {session.title}
+                                </div>
+                                <div className="text-[9px] text-slate-400 mt-0.5">
+                                  {session.timestamp.toLocaleDateString()}
+                                </div>
+                              </div>
+                              <button
+                                onClick={(e) => deleteSession(e, session.id)}
+                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 hover:text-red-500 rounded-lg transition-all text-slate-400"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </motion.div>
+                          ))}
+                        </motion.div>
+                      </section>
+
+                      {allImages.length > 0 && (
+                        <section>
+                          <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Image History</h3>
+                          <div className="grid grid-cols-2 gap-2">
+                            {allImages.map((img) => (
+                              <div key={img.messageId} className="relative group rounded-xl overflow-hidden border border-white/10 aspect-square bg-black/10">
+                                <img src={img.url} alt={img.prompt} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2">
+                                  <div className="text-[8px] text-white font-medium line-clamp-2 leading-tight">
+                                    {img.prompt}
+                                  </div>
+                                  <div className="flex gap-1 justify-end">
+                                    <button 
+                                      onClick={() => handleDownloadImage(img.url, img.messageId)}
+                                      className="p-1.5 bg-white/20 hover:bg-white/40 rounded-lg text-white transition-colors"
+                                      title="Download"
+                                    >
+                                      <Download size={12} />
+                                    </button>
+                                    <button 
+                                      onClick={() => {
+                                        setIsSidebarOpen(false);
+                                        handleSend(img.prompt, true);
+                                      }}
+                                      className="p-1.5 bg-bharat-blue/80 hover:bg-bharat-blue rounded-lg text-white transition-colors"
+                                      title="Regenerate"
+                                    >
+                                      <Sparkles size={12} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </section>
+                      )}
+                    </div>
                   ) : (
                     <div className="text-center py-8">
                       <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No history yet</div>
