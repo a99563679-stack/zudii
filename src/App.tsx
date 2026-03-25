@@ -28,7 +28,10 @@ import {
   User as UserIcon,
   Volume2,
   VolumeX,
-  Play
+  Play,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  Loader2
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'motion/react';
@@ -61,12 +64,24 @@ import {
 } from 'firebase/firestore';
 import { Modality } from "@google/genai";
 
+declare global {
+  interface Window {
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
   detectedLanguage?: string;
+  imageUrl?: string;
+  videoUrl?: string;
+  isGenerating?: boolean;
 }
 
 interface ChatSession {
@@ -191,6 +206,26 @@ function BharatAIApp() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isPlaying, setIsPlaying] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [hasApiKey, setHasApiKey] = useState(false);
+
+  useEffect(() => {
+    const checkApiKey = async () => {
+      if (window.aistudio?.hasSelectedApiKey) {
+        const selected = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(selected);
+      }
+    };
+    checkApiKey();
+  }, []);
+
+  const ensureApiKey = async () => {
+    if (window.aistudio?.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      setHasApiKey(true);
+      return true;
+    }
+    return false;
+  };
   
   useEffect(() => {
     const interval = setInterval(() => {
@@ -596,6 +631,21 @@ function BharatAIApp() {
     try {
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
       const ai = new GoogleGenAI({ apiKey });
+
+      // Check for image/video generation intent
+      const lowerInput = input.toLowerCase();
+      const isImageRequest = lowerInput.includes('generate image') || lowerInput.includes('create image') || lowerInput.includes('draw') || lowerInput.includes('picture of');
+      const isVideoRequest = lowerInput.includes('generate video') || lowerInput.includes('create video') || lowerInput.includes('make a video');
+
+      if (isImageRequest) {
+        await handleGenerateImage(input, activeSessionId);
+        return;
+      }
+
+      if (isVideoRequest) {
+        await handleGenerateVideo(input, activeSessionId);
+        return;
+      }
       
       const finalContents = [];
       newMessages.slice(-10).forEach(msg => { // Limit context to last 10 messages
@@ -668,6 +718,133 @@ function BharatAIApp() {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: "I encountered an error while processing your request. Please try again.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGenerateImage = async (prompt: string, sessionId: string | null) => {
+    try {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const ai = new GoogleGenAI({ apiKey });
+      
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: {
+          parts: [{ text: prompt }]
+        },
+        config: {
+          imageConfig: {
+            aspectRatio: "1:1"
+          }
+        }
+      });
+
+      let imageUrl = '';
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+          break;
+        }
+      }
+
+      const assistantMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: `I have generated this image for you based on: "${prompt}"`,
+        timestamp: new Date(),
+        imageUrl
+      };
+
+      if (user && sessionId) {
+        const msgRef = doc(db, 'users', user.uid, 'sessions', sessionId, 'messages', assistantMessage.id);
+        await setDoc(msgRef, {
+          ...assistantMessage,
+          sessionId,
+          timestamp: Timestamp.fromDate(assistantMessage.timestamp)
+        });
+      } else {
+        setMessages((prev) => [...prev, assistantMessage]);
+      }
+    } catch (error) {
+      console.error("Image Generation Error:", error);
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "I encountered an error while generating the image. Please try again.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGenerateVideo = async (prompt: string, sessionId: string | null) => {
+    if (!hasApiKey) {
+      const success = await ensureApiKey();
+      if (!success) return;
+    }
+
+    try {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const ai = new GoogleGenAI({ apiKey });
+      
+      let operation = await ai.models.generateVideos({
+        model: 'veo-3.1-fast-generate-preview',
+        prompt: prompt,
+        config: {
+          numberOfVideos: 1,
+          resolution: '720p',
+          aspectRatio: '16:9'
+        }
+      });
+
+      // Poll for completion
+      while (!operation.done) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        operation = await ai.operations.getVideosOperation({ operation: operation });
+      }
+
+      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+      if (downloadLink) {
+        const videoResponse = await fetch(downloadLink, {
+          method: 'GET',
+          headers: {
+            'x-goog-api-key': apiKey,
+          },
+        });
+        const blob = await videoResponse.blob();
+        const videoUrl = URL.createObjectURL(blob);
+
+        const assistantMessage: Message = {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: `I have created this video for you: "${prompt}"`,
+          timestamp: new Date(),
+          videoUrl
+        };
+
+        if (user && sessionId) {
+          const msgRef = doc(db, 'users', user.uid, 'sessions', sessionId, 'messages', assistantMessage.id);
+          await setDoc(msgRef, {
+            ...assistantMessage,
+            sessionId,
+            timestamp: Timestamp.fromDate(assistantMessage.timestamp)
+          });
+        } else {
+          setMessages((prev) => [...prev, assistantMessage]);
+        }
+      }
+    } catch (error) {
+      console.error("Video Generation Error:", error);
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "I encountered an error while generating the video. Please try again.",
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, errorMessage]);
@@ -1050,6 +1227,35 @@ function BharatAIApp() {
                     </div>
                   )}
                   <ReactMarkdown>{message.content}</ReactMarkdown>
+                  
+                  {message.imageUrl && (
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="mt-4 rounded-2xl overflow-hidden border border-white/20 shadow-lg"
+                    >
+                      <img 
+                        src={message.imageUrl} 
+                        alt="Generated AI Art" 
+                        className="w-full h-auto object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    </motion.div>
+                  )}
+
+                  {message.videoUrl && (
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="mt-4 rounded-2xl overflow-hidden border border-white/20 shadow-lg bg-black aspect-video flex items-center justify-center"
+                    >
+                      <video 
+                        src={message.videoUrl} 
+                        controls 
+                        className="w-full h-full"
+                      />
+                    </motion.div>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -1103,6 +1309,29 @@ function BharatAIApp() {
 
           <div className="flex items-center gap-2 md:gap-4">
             <div className="flex-1 glass-card rounded-full px-4 py-2.5 md:px-6 md:py-4 flex items-center gap-2 md:gap-4 shadow-lg">
+              <div className="relative group">
+                <button 
+                  className="text-slate-400 hover:text-bharat-saffron transition-colors"
+                >
+                  <Sparkles className="size-4 md:size-5" />
+                </button>
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 hidden group-hover:flex flex-col gap-2 bg-white rounded-2xl p-2 shadow-2xl border border-slate-100 min-w-[140px]">
+                  <button 
+                    onClick={() => setInput("Generate an image of ")}
+                    className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl text-[10px] font-black text-slate-600 uppercase tracking-wider transition-colors"
+                  >
+                    <ImageIcon size={14} className="text-bharat-saffron" />
+                    Image
+                  </button>
+                  <button 
+                    onClick={() => setInput("Generate a video of ")}
+                    className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl text-[10px] font-black text-slate-600 uppercase tracking-wider transition-colors"
+                  >
+                    <VideoIcon size={14} className="text-bharat-blue" />
+                    Video
+                  </button>
+                </div>
+              </div>
               <input 
                 type="file" 
                 ref={fileInputRef} 
