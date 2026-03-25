@@ -14,8 +14,43 @@ async function startServer() {
   const PORT = 3000;
 
   // API routes FIRST
+  app.use(express.json());
+
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
+  });
+
+  app.post("/api/generate-image", async (req, res) => {
+    const { prompt } = req.body;
+    if (!process.env.FREEPIK_API_KEY) {
+      console.error("FREEPIK_API_KEY is missing!");
+      return res.status(500).json({ error: "API key is missing" });
+    }
+    try {
+      const response = await fetch("https://api.freepik.com/v1/ai/text-to-image", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-freepik-api-key": process.env.FREEPIK_API_KEY!,
+        },
+        body: JSON.stringify({
+          prompt,
+          num_images: 1,
+          image: {
+            size: "1024x1024"
+          }
+        }),
+      });
+      const data = await response.json();
+      console.log("Freepik API response:", JSON.stringify(data, null, 2));
+      if (!response.ok) {
+        res.status(response.status).json({ error: data.message || "Freepik API error" });
+      } else {
+        res.json(data);
+      }
+    } catch (error) {
+      res.status(500).json({ error: "Failed to generate image" });
+    }
   });
 
   // Vite middleware for development

@@ -638,7 +638,7 @@ function BharatAIApp() {
       }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sessions/${activeSessionId}/messages/${userMessage.id}`));
     }
 
-    if (overrideInput === undefined) {
+    if (typeof overrideInput !== 'string') {
       setInput('');
     }
     const currentFiles = [...attachedFiles];
