@@ -1121,7 +1121,7 @@ function BharatAIApp() {
                       />
                       <button
                         onClick={() => handleDownloadImage(message.imageUrl!, message.id)}
-                        className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/70 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow-sm backdrop-blur-sm"
+                        className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/80 text-white rounded-lg transition-all duration-200 shadow-sm backdrop-blur-sm"
                         title="Download Image"
                       >
                         <Download size={16} />
