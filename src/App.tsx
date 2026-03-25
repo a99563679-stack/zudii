@@ -81,7 +81,9 @@ interface Message {
   detectedLanguage?: string;
   imageUrl?: string;
   videoUrl?: string;
+  videoUri?: string;
   isGenerating?: boolean;
+  progress?: number;
 }
 
 interface ChatSession {
@@ -89,6 +91,37 @@ interface ChatSession {
   title: string;
   messages: Message[];
   timestamp: Date;
+}
+
+// Helper to add WAV header to raw PCM data
+function addWavHeader(pcmData: Uint8Array, sampleRate: number = 24000): Uint8Array {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+
+  // RIFF chunk descriptor
+  view.setUint32(0, 0x52494646, false); // "RIFF"
+  view.setUint32(4, 36 + pcmData.length, true); // chunk size
+  view.setUint32(8, 0x57415645, false); // "WAVE"
+
+  // fmt sub-chunk
+  view.setUint32(12, 0x666d7420, false); // "fmt "
+  view.setUint32(16, 16, true); // sub-chunk size
+  view.setUint16(20, 1, true); // audio format (PCM)
+  view.setUint16(22, 1, true); // number of channels (mono)
+  view.setUint32(24, sampleRate, true); // sample rate
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+
+  // data sub-chunk
+  view.setUint32(36, 0x64617461, false); // "data"
+  view.setUint32(40, pcmData.length, true); // data size
+
+  const wavData = new Uint8Array(header.byteLength + pcmData.length);
+  wavData.set(new Uint8Array(header), 0);
+  wavData.set(pcmData, 44);
+
+  return wavData;
 }
 
 // Error Boundary Component
@@ -205,6 +238,7 @@ function BharatAIApp() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isPlaying, setIsPlaying] = useState<string | null>(null);
+  const [imageAspectRatio, setImageAspectRatio] = useState<"1:1" | "16:9" | "9:16">("1:1");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
 
@@ -364,7 +398,7 @@ function BharatAIApp() {
     }
   };
 
-  const playTTS = async (messageId: string, text: string) => {
+  const playTTS = async (messageId: string, text: string, language?: string) => {
     if (isPlaying === messageId) {
       if (audioRef.current) {
         audioRef.current.pause();
@@ -377,9 +411,14 @@ function BharatAIApp() {
     try {
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
       const ai = new GoogleGenAI({ apiKey });
+      
+      const prompt = language 
+        ? `Speak this clearly in ${language}: ${text}`
+        : `Speak this clearly: ${text}`;
+
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: `Speak this clearly: ${text}` }] }],
+        contents: [{ parts: [{ text: prompt }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
@@ -390,17 +429,29 @@ function BharatAIApp() {
         },
       });
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      const part = response.candidates?.[0]?.content?.parts?.[0];
+      const base64Audio = part?.inlineData?.data;
+      const mimeType = part?.inlineData?.mimeType || 'audio/mp3';
+      
       if (base64Audio) {
-        const audioUrl = `data:audio/mp3;base64,${base64Audio}`;
+        let audioUrl = '';
+        if (mimeType.includes('pcm')) {
+          const pcmData = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0));
+          const wavData = addWavHeader(pcmData);
+          const blob = new Blob([wavData], { type: 'audio/wav' });
+          audioUrl = URL.createObjectURL(blob);
+        } else {
+          audioUrl = `data:${mimeType};base64,${base64Audio}`;
+        }
+
         if (audioRef.current) {
           audioRef.current.src = audioUrl;
-          audioRef.current.play();
+          audioRef.current.play().catch(e => console.error("Playback failed:", e));
           audioRef.current.onended = () => setIsPlaying(null);
         } else {
           const audio = new Audio(audioUrl);
           audioRef.current = audio;
-          audio.play();
+          audio.play().catch(e => console.error("Playback failed:", e));
           audio.onended = () => setIsPlaying(null);
         }
       }
@@ -727,6 +778,19 @@ function BharatAIApp() {
   };
 
   const handleGenerateImage = async (prompt: string, sessionId: string | null) => {
+    const placeholderId = Date.now().toString();
+    const placeholderMessage: Message = {
+      id: placeholderId,
+      role: 'assistant',
+      content: `I am generating a ${imageAspectRatio} image for you based on: "${prompt}"...`,
+      timestamp: new Date(),
+      isGenerating: true,
+      imageUrl: 'placeholder' // To trigger image-specific loading text
+    };
+
+    setMessages((prev) => [...prev, placeholderMessage]);
+    setIsLoading(true);
+
     try {
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
       const ai = new GoogleGenAI({ apiKey });
@@ -738,7 +802,7 @@ function BharatAIApp() {
         },
         config: {
           imageConfig: {
-            aspectRatio: "1:1"
+            aspectRatio: imageAspectRatio
           }
         }
       });
@@ -752,11 +816,12 @@ function BharatAIApp() {
       }
 
       const assistantMessage: Message = {
-        id: Date.now().toString(),
+        id: placeholderId,
         role: 'assistant',
-        content: `I have generated this image for you based on: "${prompt}"`,
+        content: `I have generated this ${imageAspectRatio} image for you based on: "${prompt}"`,
         timestamp: new Date(),
-        imageUrl
+        imageUrl,
+        isGenerating: false
       };
 
       if (user && sessionId) {
@@ -766,18 +831,26 @@ function BharatAIApp() {
           sessionId,
           timestamp: Timestamp.fromDate(assistantMessage.timestamp)
         });
+        // Update local state to replace placeholder
+        setMessages((prev) => prev.map(m => m.id === placeholderId ? assistantMessage : m));
       } else {
-        setMessages((prev) => [...prev, assistantMessage]);
+        setMessages((prev) => prev.map(m => m.id === placeholderId ? assistantMessage : m));
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Image Generation Error:", error);
+      let errorText = "I encountered an error while generating the image. Please try again.";
+      if (error?.message?.toLowerCase().includes('quota') || error?.message?.toLowerCase().includes('limit')) {
+        errorText = "Bharat AI has reached its temporary generation limit (Quota Exceeded). Please wait a few minutes and try again.";
+      }
+      
       const errorMessage: Message = {
-        id: Date.now().toString(),
+        id: placeholderId,
         role: 'assistant',
-        content: "I encountered an error while generating the image. Please try again.",
+        content: errorText,
         timestamp: new Date(),
+        isGenerating: false
       };
-      setMessages((prev) => [...prev, errorMessage]);
+      setMessages((prev) => prev.map(m => m.id === placeholderId ? errorMessage : m));
     } finally {
       setIsLoading(false);
     }
@@ -788,6 +861,19 @@ function BharatAIApp() {
       const success = await ensureApiKey();
       if (!success) return;
     }
+
+    const placeholderId = Date.now().toString();
+    const placeholderMessage: Message = {
+      id: placeholderId,
+      role: 'assistant',
+      content: `I am crafting a cinematic video for you: "${prompt}"...`,
+      timestamp: new Date(),
+      isGenerating: true,
+      progress: 5
+    };
+
+    setMessages((prev) => [...prev, placeholderMessage]);
+    setIsLoading(true);
 
     try {
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
@@ -804,9 +890,14 @@ function BharatAIApp() {
       });
 
       // Poll for completion
+      let currentProgress = 5;
       while (!operation.done) {
         await new Promise(resolve => setTimeout(resolve, 5000));
         operation = await ai.operations.getVideosOperation({ operation: operation });
+        
+        // Simulate progress
+        currentProgress = Math.min(95, currentProgress + Math.floor(Math.random() * 10) + 2);
+        setMessages((prev) => prev.map(m => m.id === placeholderId ? { ...m, progress: currentProgress } : m));
       }
 
       const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
@@ -821,11 +912,14 @@ function BharatAIApp() {
         const videoUrl = URL.createObjectURL(blob);
 
         const assistantMessage: Message = {
-          id: Date.now().toString(),
+          id: placeholderId,
           role: 'assistant',
           content: `I have created this video for you: "${prompt}"`,
           timestamp: new Date(),
-          videoUrl
+          videoUrl,
+          videoUri: downloadLink,
+          isGenerating: false,
+          progress: 100
         };
 
         if (user && sessionId) {
@@ -835,19 +929,52 @@ function BharatAIApp() {
             sessionId,
             timestamp: Timestamp.fromDate(assistantMessage.timestamp)
           });
+          setMessages((prev) => prev.map(m => m.id === placeholderId ? assistantMessage : m));
         } else {
-          setMessages((prev) => [...prev, assistantMessage]);
+          setMessages((prev) => prev.map(m => m.id === placeholderId ? assistantMessage : m));
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Video Generation Error:", error);
+      let errorText = "I encountered an error while generating the video. Please try again.";
+      if (error?.message?.toLowerCase().includes('quota') || error?.message?.toLowerCase().includes('limit')) {
+        errorText = "Bharat AI has reached its temporary generation limit (Quota Exceeded). Please wait a few minutes and try again.";
+      }
+
       const errorMessage: Message = {
-        id: Date.now().toString(),
+        id: placeholderId,
         role: 'assistant',
-        content: "I encountered an error while generating the video. Please try again.",
+        content: errorText,
         timestamp: new Date(),
+        isGenerating: false
       };
-      setMessages((prev) => [...prev, errorMessage]);
+      setMessages((prev) => prev.map(m => m.id === placeholderId ? errorMessage : m));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleReloadVideo = async (message: Message) => {
+    if (!message.videoUri) return;
+    
+    setIsLoading(true);
+    try {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+      const videoResponse = await fetch(message.videoUri, {
+        method: 'GET',
+        headers: {
+          'x-goog-api-key': apiKey,
+        },
+      });
+      
+      if (!videoResponse.ok) throw new Error("Failed to fetch video");
+      
+      const blob = await videoResponse.blob();
+      const videoUrl = URL.createObjectURL(blob);
+      
+      setMessages(prev => prev.map(m => m.id === message.id ? { ...m, videoUrl } : m));
+    } catch (error) {
+      console.error("Video Reload Error:", error);
     } finally {
       setIsLoading(false);
     }
@@ -1214,7 +1341,7 @@ function BharatAIApp() {
                         </div>
                       )}
                       <button
-                        onClick={() => playTTS(message.id, message.content)}
+                        onClick={() => playTTS(message.id, message.content, message.detectedLanguage)}
                         className={cn(
                           "p-1.5 rounded-full transition-all",
                           isPlaying === message.id 
@@ -1228,7 +1355,53 @@ function BharatAIApp() {
                   )}
                   <ReactMarkdown>{message.content}</ReactMarkdown>
                   
-                  {message.imageUrl && (
+                  {message.isGenerating && (
+                    <div className="mt-4 flex flex-col items-center justify-center p-10 glass-card rounded-3xl border border-white/30 shadow-2xl bg-white/10 backdrop-blur-md overflow-hidden relative">
+                      {/* Background Glows */}
+                      <div className="absolute top-0 left-1/4 w-32 h-32 bg-bharat-saffron/20 blur-[60px] rounded-full animate-pulse" />
+                      <div className="absolute bottom-0 right-1/4 w-32 h-32 bg-bharat-green/20 blur-[60px] rounded-full animate-pulse [animation-delay:1s]" />
+                      
+                      <div className="relative z-10 flex flex-col items-center">
+                        <div className="w-16 h-16 mb-6 relative">
+                          <AshokaChakra className="w-full h-full text-bharat-blue" spin />
+                          <motion.div 
+                            animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
+                            transition={{ duration: 2, repeat: Infinity }}
+                            className="absolute inset-0 bg-bharat-blue/10 blur-xl rounded-full"
+                          />
+                        </div>
+                        
+                        <div className="space-y-4 text-center w-full max-w-[200px]">
+                          <p className="text-[11px] font-black text-slate-700 uppercase tracking-[0.2em] animate-pulse">
+                            {message.imageUrl ? "Bharat AI is painting your imagination..." : "Bharat AI is crafting your cinematic vision..."}
+                          </p>
+                          
+                          {message.progress !== undefined && (
+                            <div className="space-y-2">
+                              <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden border border-white/20">
+                                <motion.div 
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${message.progress}%` }}
+                                  className="h-full bg-gradient-to-r from-bharat-saffron via-white to-bharat-green"
+                                />
+                              </div>
+                              <p className="text-[9px] font-bold text-bharat-blue uppercase tracking-widest">
+                                {message.progress}% Complete
+                              </p>
+                            </div>
+                          )}
+
+                          <div className="flex justify-center gap-1.5">
+                            <span className="w-1 h-1 bg-bharat-saffron rounded-full animate-bounce [animation-delay:-0.3s]" />
+                            <span className="w-1 h-1 bg-white rounded-full animate-bounce [animation-delay:-0.15s]" />
+                            <span className="w-1 h-1 bg-bharat-green rounded-full animate-bounce" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {message.imageUrl && !message.isGenerating && (
                     <motion.div 
                       initial={{ opacity: 0, scale: 0.9 }}
                       animate={{ opacity: 1, scale: 1 }}
@@ -1243,19 +1416,41 @@ function BharatAIApp() {
                     </motion.div>
                   )}
 
-                  {message.videoUrl && (
-                    <motion.div 
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="mt-4 rounded-2xl overflow-hidden border border-white/20 shadow-lg bg-black aspect-video flex items-center justify-center"
-                    >
-                      <video 
-                        src={message.videoUrl} 
-                        controls 
-                        className="w-full h-full"
-                      />
-                    </motion.div>
-                  )}
+                  {message.videoUrl || message.videoUri ? (
+                    !message.isGenerating && (
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="mt-4 rounded-2xl overflow-hidden border border-white/20 shadow-lg bg-black aspect-video flex items-center justify-center relative group"
+                      >
+                        {message.videoUrl ? (
+                          <video 
+                            src={message.videoUrl} 
+                            controls 
+                            playsInline
+                            className="w-full h-full"
+                            onError={(e) => {
+                              console.error("Video loading error:", e);
+                              // If it's a blob URL and it failed, it's likely expired
+                              if (message.videoUrl?.startsWith('blob:')) {
+                                // We could trigger a re-fetch here if we had the logic
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center gap-4 text-white/60">
+                            <VideoIcon size={48} className="animate-pulse" />
+                            <button 
+                              onClick={() => handleReloadVideo(message)}
+                              className="px-6 py-2 bg-bharat-blue text-white rounded-full text-xs font-black uppercase tracking-widest hover:bg-bharat-blue/80 transition-colors"
+                            >
+                              Load Video
+                            </button>
+                          </div>
+                        )}
+                      </motion.div>
+                    )
+                  ) : null}
                 </div>
               </div>
             </motion.div>
@@ -1315,7 +1510,10 @@ function BharatAIApp() {
                 >
                   <Sparkles className="size-4 md:size-5" />
                 </button>
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 hidden group-hover:flex flex-col gap-2 bg-white rounded-2xl p-2 shadow-2xl border border-slate-100 min-w-[140px]">
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 hidden group-hover:flex flex-col gap-2 bg-white rounded-2xl p-3 shadow-2xl border border-slate-100 min-w-[160px]">
+                  <div className="px-1 py-0.5 text-[8px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 mb-1">
+                    Quick Actions
+                  </div>
                   <button 
                     onClick={() => setInput("Generate an image of ")}
                     className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl text-[10px] font-black text-slate-600 uppercase tracking-wider transition-colors"
@@ -1330,6 +1528,26 @@ function BharatAIApp() {
                     <VideoIcon size={14} className="text-bharat-blue" />
                     Video
                   </button>
+                  
+                  <div className="px-1 py-0.5 text-[8px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 my-1">
+                    Image Aspect Ratio
+                  </div>
+                  <div className="flex gap-1">
+                    {(["1:1", "16:9", "9:16"] as const).map((ratio) => (
+                      <button
+                        key={ratio}
+                        onClick={() => setImageAspectRatio(ratio)}
+                        className={cn(
+                          "flex-1 py-1.5 rounded-lg text-[9px] font-black transition-all",
+                          imageAspectRatio === ratio 
+                            ? "bg-bharat-saffron text-white shadow-sm" 
+                            : "bg-slate-50 text-slate-400 hover:bg-slate-100"
+                        )}
+                      >
+                        {ratio}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <input 
