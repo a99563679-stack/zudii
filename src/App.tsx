@@ -652,23 +652,18 @@ function BharatAIApp() {
           throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
         }
         const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash-image',
-          contents: {
-            parts: [{ text: textToSend }],
+        const response = await ai.models.generateImages({
+          model: 'imagen-4.0-generate-001',
+          prompt: textToSend,
+          config: {
+            numberOfImages: 1,
+            outputMimeType: 'image/jpeg',
+            aspectRatio: '1:1',
           },
         });
 
-        let imageUrl = '';
-        const parts = response.candidates?.[0]?.content?.parts || [];
-        for (const part of parts) {
-          if (part.inlineData) {
-            const base64EncodeString = part.inlineData.data;
-            const mimeType = part.inlineData.mimeType || 'image/png';
-            imageUrl = `data:${mimeType};base64,${base64EncodeString}`;
-            break;
-          }
-        }
+        const base64EncodeString = response.generatedImages[0].image.imageBytes;
+        const imageUrl = `data:image/jpeg;base64,${base64EncodeString}`;
 
         if (!imageUrl) throw new Error("Failed to generate image.");
 
@@ -763,6 +758,8 @@ function BharatAIApp() {
         errorContent = "Namaste! It seems I've reached my daily limit. Please try again tomorrow or check your API quota in the AI Studio settings.";
       } else if (error?.message) {
         errorContent = `I encountered an error: ${error.message}. Please ensure your API keys are valid and try again.`;
+      } else {
+        errorContent = `An unexpected error occurred: ${JSON.stringify(error)}`;
       }
 
       const errorMessage: Message = {
