@@ -652,18 +652,23 @@ function BharatAIApp() {
           throw new Error("Gemini API key is missing. Please add it to your secrets in the AI Studio settings.");
         }
         const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateImages({
-          model: 'imagen-4.0-generate-001',
-          prompt: textToSend,
-          config: {
-            numberOfImages: 1,
-            outputMimeType: 'image/jpeg',
-            aspectRatio: '1:1',
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-image',
+          contents: {
+            parts: [{ text: textToSend }],
           },
         });
 
-        const base64EncodeString = response.generatedImages[0].image.imageBytes;
-        const imageUrl = `data:image/jpeg;base64,${base64EncodeString}`;
+        let imageUrl = '';
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.inlineData) {
+            const base64EncodeString = part.inlineData.data;
+            const mimeType = part.inlineData.mimeType || 'image/png';
+            imageUrl = `data:${mimeType};base64,${base64EncodeString}`;
+            break;
+          }
+        }
 
         if (!imageUrl) throw new Error("Failed to generate image.");
 
