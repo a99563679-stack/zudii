@@ -29,7 +29,8 @@ import {
   Volume2,
   VolumeX,
   Play,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Download
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'motion/react';
@@ -538,6 +539,23 @@ function BharatAIApp() {
     } catch (err) {
       console.error("Failed to start recognition:", err);
       setIsListening(false);
+    }
+  };
+
+  const handleDownloadImage = async (imageUrl: string, messageId: string) => {
+    try {
+      const response = await fetch(imageUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bharat-ai-image-${messageId}.png`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("Failed to download image:", error);
     }
   };
 
@@ -1094,13 +1112,20 @@ function BharatAIApp() {
                   )}
                   <ReactMarkdown>{message.content}</ReactMarkdown>
                   {message.imageUrl && (
-                    <div className="mt-4">
+                    <div className="mt-4 relative group inline-block">
                       <img 
                         src={message.imageUrl} 
                         alt="Generated" 
                         className="rounded-xl max-w-full h-auto shadow-md border border-slate-200"
                         referrerPolicy="no-referrer"
                       />
+                      <button
+                        onClick={() => handleDownloadImage(message.imageUrl!, message.id)}
+                        className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/70 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow-sm backdrop-blur-sm"
+                        title="Download Image"
+                      >
+                        <Download size={16} />
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1174,19 +1199,25 @@ function BharatAIApp() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Type your message..."
+                placeholder={isImageMode ? "Describe the image you want to generate..." : "Type your message..."}
                 className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 font-medium"
               />
-              <button 
-                onClick={() => setIsImageMode(!isImageMode)}
-                className={cn(
-                  "transition-all duration-300",
-                  isImageMode ? "text-bharat-saffron scale-110" : "text-slate-400 hover:text-bharat-saffron"
-                )}
-                title="Image Generation Mode"
-              >
-                <ImageIcon className="size-4 md:size-5" />
-              </button>
+              <div className="relative group flex items-center">
+                <button 
+                  onClick={() => setIsImageMode(!isImageMode)}
+                  className={cn(
+                    "transition-all duration-300",
+                    isImageMode ? "text-bharat-saffron scale-110" : "text-slate-400 hover:text-bharat-saffron"
+                  )}
+                  title="Image Generation Mode"
+                >
+                  <ImageIcon className="size-4 md:size-5" />
+                </button>
+                {/* Tooltip */}
+                <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 text-white text-[10px] rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                  {isImageMode ? "Disable Image Mode" : "Enable Image Mode"}
+                </div>
+              </div>
               <button 
                 onClick={toggleListening}
                 className={cn(
