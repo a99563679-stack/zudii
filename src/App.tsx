@@ -1200,7 +1200,7 @@ function BharatAIApp() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                 placeholder={isImageMode ? "Describe the image you want to generate..." : "Type your message..."}
-                className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 font-medium"
+                className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-black font-medium"
               />
               <div className="relative group flex items-center">
                 <button 
