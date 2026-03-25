@@ -118,8 +118,13 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
   }
 }
 
-const AshokaChakra = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 100 100" className={cn("text-bharat-chakra", className)}>
+const AshokaChakra = ({ className, spin = false }: { className?: string, spin?: boolean }) => (
+  <motion.svg 
+    viewBox="0 0 100 100" 
+    className={cn("text-bharat-chakra", className)}
+    animate={{ rotate: 360 }}
+    transition={{ duration: spin ? 3 : 20, repeat: Infinity, ease: "linear" }}
+  >
     <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="2" />
     <circle cx="50" cy="50" r="8" fill="currentColor" />
     {[...Array(24)].map((_, i) => (
@@ -134,7 +139,7 @@ const AshokaChakra = ({ className }: { className?: string }) => (
       />
     ))}
     <circle cx="50" cy="50" r="42" fill="none" stroke="currentColor" strokeWidth="0.5" strokeDasharray="1,2" />
-  </svg>
+  </motion.svg>
 );
 
 const BHARAT_LANGUAGES = [
@@ -306,7 +311,8 @@ function BharatAIApp() {
     } catch (error: any) {
       console.error("Login failed:", error);
       if (error.code === 'auth/unauthorized-domain') {
-        setLoginError(`Domain not authorized. Please add "${window.location.hostname}" to Firebase Authorized Domains.`);
+        const projectId = auth.app.options.projectId;
+        setLoginError(`Domain not authorized. Please add "${window.location.hostname}" to the Authorized Domains list in your Firebase project: "${projectId}".`);
       } else if (error.code === 'auth/popup-blocked') {
         setLoginError("Login popup was blocked. Please allow popups for this site.");
       } else {
@@ -696,7 +702,7 @@ function BharatAIApp() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl chakra-logo flex items-center justify-center p-1.5 bg-white">
-                    <AshokaChakra className="w-full h-full animate-chakra" />
+                    <AshokaChakra className="w-full h-full" />
                   </div>
                   <span className="font-black text-bharat-blue tracking-tight">Bharat AI</span>
                 </div>
@@ -708,64 +714,102 @@ function BharatAIApp() {
                 </button>
               </div>
 
-              {user ? (
-                <div className="flex items-center gap-3 p-4 rounded-2xl bg-white/10 border border-white/20">
-                  <img 
-                    src={user.photoURL || ''} 
-                    alt={user.displayName || 'User'} 
-                    className="w-10 h-10 rounded-full border-2 border-bharat-blue"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-800 truncate">{user.displayName}</div>
-                    <button 
-                      onClick={handleLogout}
-                      className="text-[10px] font-bold text-red-500 hover:text-red-600 flex items-center gap-1 mt-0.5"
-                    >
-                      <LogOut size={10} />
-                      Sign Out
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <button
-                    onClick={handleLogin}
-                    className="w-full py-3 px-4 rounded-2xl bg-white border border-bharat-blue/20 text-bharat-blue font-black text-sm flex items-center justify-center gap-2 shadow-md hover:bg-slate-50 transition-all"
+              <AnimatePresence mode="wait">
+                {user ? (
+                  <motion.div 
+                    key="user-profile"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="flex items-center gap-3 p-4 rounded-2xl bg-white/10 border border-white/20"
                   >
-                    <LogIn size={18} />
-                    Sign In with Google
-                  </button>
-                  {loginError && (
-                    <div className="p-3 rounded-xl bg-red-50 border border-red-100 text-[10px] text-red-600 font-bold break-words">
-                      Error: {loginError}
+                    <img 
+                      src={user.photoURL || ''} 
+                      alt={user.displayName || 'User'} 
+                      className="w-10 h-10 rounded-full border-2 border-bharat-blue"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-black text-slate-800 truncate">{user.displayName}</div>
+                      <button 
+                        onClick={handleLogout}
+                        className="text-[10px] font-bold text-red-500 hover:text-red-600 flex items-center gap-1 mt-0.5"
+                      >
+                        <LogOut size={10} />
+                        Sign Out
+                      </button>
                     </div>
-                  )}
-                  {!isAuthReady && (
-                    <div className="text-center text-[9px] text-slate-400 font-bold animate-pulse">
-                      Initializing Auth...
-                    </div>
-                  )}
-                </div>
-              )}
+                  </motion.div>
+                ) : (
+                  <motion.div 
+                    key="login-prompt"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="space-y-3"
+                  >
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={handleLogin}
+                      className="w-full py-3 px-4 rounded-2xl bg-white border border-bharat-blue/20 text-bharat-blue font-black text-sm flex items-center justify-center gap-2 shadow-md hover:bg-slate-50 transition-all"
+                    >
+                      <LogIn size={18} />
+                      Sign In with Google
+                    </motion.button>
+                    {loginError && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        className="p-3 rounded-xl bg-red-50 border border-red-100 text-[10px] text-red-600 font-bold break-words"
+                      >
+                        Error: {loginError}
+                      </motion.div>
+                    )}
+                    {!isAuthReady && (
+                      <div className="text-center text-[9px] text-slate-400 font-bold animate-pulse">
+                        Initializing Auth...
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
-              <button
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={startNewChat}
-                className="w-full py-3 px-4 rounded-2xl bg-bharat-blue text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all"
+                className="w-full py-3 px-4 rounded-2xl bg-bharat-blue text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg transition-all"
               >
                 <Plus size={18} />
                 New Chat
-              </button>
+              </motion.button>
 
-              <div className="flex-1 overflow-y-auto space-y-8 pr-2">
+              <div className="flex-1 overflow-y-auto space-y-8 pr-2 custom-scrollbar">
                 {user ? (
                   sessions.length > 0 ? (
                     <section>
                       <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Chat History</h3>
-                      <div className="space-y-2">
+                      <motion.div 
+                        initial="hidden"
+                        animate="show"
+                        variants={{
+                          show: {
+                            transition: {
+                              staggerChildren: 0.05
+                            }
+                          }
+                        }}
+                        className="space-y-2"
+                      >
                         {sessions.map((session) => (
-                          <div
+                          <motion.div
                             key={session.id}
+                            variants={{
+                              hidden: { opacity: 0, x: -10 },
+                              show: { opacity: 1, x: 0 }
+                            }}
+                            whileHover={{ x: 4 }}
                             onClick={() => switchSession(session.id)}
                             className={cn(
                               "group relative flex items-center gap-3 p-3 rounded-2xl border transition-all cursor-pointer",
@@ -797,9 +841,9 @@ function BharatAIApp() {
                             >
                               <Trash2 size={14} />
                             </button>
-                          </div>
+                          </motion.div>
                         ))}
-                      </div>
+                      </motion.div>
                     </section>
                   ) : (
                     <div className="text-center py-8">
@@ -817,10 +861,27 @@ function BharatAIApp() {
 
                 <section>
                   <h3 className="text-[10px] font-black text-bharat-saffron uppercase tracking-[0.2em] mb-4">Available Languages</h3>
-                  <div className="grid grid-cols-2 gap-2">
+                  <motion.div 
+                    initial="hidden"
+                    animate="show"
+                    variants={{
+                      show: {
+                        transition: {
+                          staggerChildren: 0.03
+                        }
+                      }
+                    }}
+                    className="grid grid-cols-2 gap-2"
+                  >
                     {BHARAT_LANGUAGES.map((l, i) => (
-                      <button
+                      <motion.button
                         key={l.lang}
+                        variants={{
+                          hidden: { opacity: 0, scale: 0.9 },
+                          show: { opacity: 1, scale: 1 }
+                        }}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
                         onClick={() => setLangIndex(i)}
                         className={cn(
                           "px-3 py-2 rounded-xl text-xs font-bold transition-all border",
@@ -830,9 +891,9 @@ function BharatAIApp() {
                         )}
                       >
                         {l.lang}
-                      </button>
+                      </motion.button>
                     ))}
-                  </div>
+                  </motion.div>
                 </section>
 
                 <section>
@@ -897,14 +958,14 @@ function BharatAIApp() {
         <div className="flex items-center gap-4">
           <button 
             onClick={() => setIsSidebarOpen(true)}
-            className="w-12 h-12 glass-card rounded-xl flex items-center justify-center text-bharat-blue shadow-sm hover:scale-105 active:scale-95 transition-transform"
+            className="w-12 h-12 glass-card rounded-xl flex items-center justify-center text-bharat-blue shadow-sm hover:bg-white/40 transition-colors"
           >
             <Menu size={28} />
           </button>
           
           <div className="flex items-center gap-3">
             <div className="w-16 h-16 rounded-2xl chakra-logo flex items-center justify-center p-2.5 bg-white">
-              <AshokaChakra className="w-full h-full animate-chakra" />
+              <AshokaChakra className="w-full h-full" />
             </div>
             <div className="flex flex-col">
               <h1 className="text-2xl font-black text-bharat-blue tracking-tight leading-none flex items-center gap-1">
@@ -948,12 +1009,15 @@ function BharatAIApp() {
           </div>
         </div>
 
-        <AnimatePresence initial={false}>
+        <AnimatePresence initial={false} mode="popLayout">
           {messages.map((message) => (
             <motion.div
               key={message.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
+              layout
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
               className="w-full"
             >
               <div className={cn(
@@ -999,7 +1063,7 @@ function BharatAIApp() {
           >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full glass-card flex items-center justify-center p-1.5 shrink-0 shadow-sm">
-                <AshokaChakra className="w-full h-full animate-chakra-spin" />
+                <AshokaChakra className="w-full h-full" spin />
               </div>
               <div className="flex gap-1">
                 <span className="w-1.5 h-1.5 bg-bharat-blue rounded-full animate-bounce [animation-delay:-0.3s]" />
@@ -1069,18 +1133,20 @@ function BharatAIApp() {
               >
                 {isListening ? <MicOff className="size-4 md:size-5" /> : <Mic className="size-4 md:size-5" />}
               </button>
-              <button
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={handleSend}
                 disabled={(!input.trim() && attachedFiles.length === 0) || isLoading}
                 className={cn(
                   "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all shadow-md shrink-0",
                   (!input.trim() && attachedFiles.length === 0) || isLoading
                     ? "bg-slate-100 text-slate-300 cursor-not-allowed"
-                    : "bg-bharat-blue text-white hover:scale-105 active:scale-95"
+                    : "bg-bharat-blue text-white"
                 )}
               >
                 <Send size={18} className="md:size-20 rotate-[-15deg] translate-x-0.5" />
-              </button>
+              </motion.button>
             </div>
           </div>
         </div>
@@ -1100,12 +1166,19 @@ function BharatAIApp() {
       {/* Info Modal - Kept from previous version but styled to match */}
       <AnimatePresence>
         {showInfo && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowInfo(false)}
+          >
             <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
               className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto"
+              onClick={e => e.stopPropagation()}
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
                 <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
@@ -1115,13 +1188,24 @@ function BharatAIApp() {
                   <X size={24} />
                 </button>
               </div>
-              <div className="p-8 space-y-8">
-                <section>
+              <motion.div 
+                initial="hidden"
+                animate="show"
+                variants={{
+                  show: {
+                    transition: {
+                      staggerChildren: 0.1
+                    }
+                  }
+                }}
+                className="p-8 space-y-8"
+              >
+                <motion.section variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }}>
                   <h3 className="text-sm font-bold text-bharat-saffron uppercase tracking-widest mb-3">Our Purpose</h3>
                   <p className="text-slate-600 leading-relaxed">{BHARAT_AI_PERSONA.corePurpose}</p>
-                </section>
+                </motion.section>
 
-                <section>
+                <motion.section variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }}>
                   <h3 className="text-sm font-bold text-bharat-green uppercase tracking-widest mb-4">Core Traits</h3>
                   <div className="flex flex-wrap gap-2">
                     {BHARAT_AI_PERSONA.traits.map(trait => (
@@ -1130,13 +1214,17 @@ function BharatAIApp() {
                       </span>
                     ))}
                   </div>
-                </section>
+                </motion.section>
 
-                <section>
+                <motion.section variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }}>
                   <h3 className="text-sm font-bold text-bharat-blue uppercase tracking-widest mb-4">Unique Capabilities</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {BHARAT_AI_FEATURES.map((feature, idx) => (
-                      <div key={idx} className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 hover:border-bharat-saffron/30 transition-colors">
+                      <motion.div 
+                        key={idx} 
+                        whileHover={{ scale: 1.02 }}
+                        className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 hover:border-bharat-saffron/30 transition-colors"
+                      >
                         <div className="flex items-center gap-3 mb-2">
                           <div className="p-2 bg-white rounded-lg shadow-sm text-bharat-saffron">
                             {feature.icon === 'Sparkles' && <Sparkles size={18} />}
@@ -1148,13 +1236,13 @@ function BharatAIApp() {
                           <h4 className="font-bold text-slate-800 text-sm">{feature.title}</h4>
                         </div>
                         <p className="text-xs text-slate-500 leading-normal">{feature.description}</p>
-                      </div>
+                      </motion.div>
                     ))}
                   </div>
-                </section>
-              </div>
+                </motion.section>
+              </motion.div>
             </motion.div>
-          </div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>
