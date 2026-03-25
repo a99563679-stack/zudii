@@ -618,8 +618,15 @@ function BharatAIApp() {
 
     try {
       const apiKey = process.env.GEMINI_API_KEY;
+      console.log("API Key check:", { 
+        exists: !!apiKey, 
+        isString: typeof apiKey === 'string',
+        length: apiKey?.length,
+        isPlaceholder: apiKey === "MY_GEMINI_API_KEY" || apiKey === "undefined"
+      });
+
       if (!apiKey || apiKey === "undefined" || apiKey === "MY_GEMINI_API_KEY") {
-        throw new Error("Gemini API Key is missing or invalid. Please configure it in the 'Secrets' section of the Settings menu (top right). For free models, ensure you have a valid project selected.");
+        throw new Error("Gemini API Key is missing or invalid. Please ensure you have configured 'GEMINI_API_KEY' in the 'Secrets' section of the Settings menu (top right).");
       }
 
       const ai = new GoogleGenAI({ apiKey });
