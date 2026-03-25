@@ -38,7 +38,8 @@ import {
   auth, 
   db, 
   googleProvider, 
-  signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   signOut, 
   onAuthStateChanged, 
   FirebaseUser,
@@ -225,6 +226,12 @@ function BharatAIApp() {
         ]);
       }
     });
+
+    // Handle redirect result
+    getRedirectResult(auth).catch((error) => {
+      console.error("Redirect login failed:", error);
+    });
+
     return () => unsubscribe();
   }, []);
 
@@ -291,7 +298,7 @@ function BharatAIApp() {
 
   const handleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      await signInWithRedirect(auth, googleProvider);
     } catch (error) {
       console.error("Login failed:", error);
     }
