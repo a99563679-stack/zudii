@@ -1113,12 +1113,14 @@ function BharatAIApp() {
       {/* Header */}
       <header className="px-6 py-8 flex items-center justify-between z-10">
         <div className="flex items-center gap-4">
-          <button 
+          <motion.button 
+            whileHover={{ scale: 1.05, backgroundColor: "rgba(255, 255, 255, 0.5)" }}
+            whileTap={{ scale: 0.95 }}
             onClick={() => setIsSidebarOpen(true)}
-            className="w-12 h-12 glass-card rounded-xl flex items-center justify-center text-bharat-blue shadow-sm hover:bg-white/40 transition-colors"
+            className="w-12 h-12 glass-card rounded-xl flex items-center justify-center text-bharat-blue shadow-sm transition-colors"
           >
             <Menu size={28} />
-          </button>
+          </motion.button>
           
           <div className="flex items-center gap-3">
             <div className="w-16 h-16 rounded-2xl chakra-logo flex items-center justify-center p-2.5 bg-white">
@@ -1193,7 +1195,9 @@ function BharatAIApp() {
                           <span className="text-[9px] font-bold text-bharat-blue uppercase tracking-wider">Detected: {message.detectedLanguage}</span>
                         </div>
                       )}
-                      <button
+                      <motion.button
+                        whileHover={{ scale: 1.1 }}
+                        whileTap={{ scale: 0.9 }}
                         onClick={() => playTTS(message.id, message.content)}
                         className={cn(
                           "p-1.5 rounded-full transition-all",
@@ -1203,7 +1207,7 @@ function BharatAIApp() {
                         )}
                       >
                         {isPlaying === message.id ? <VolumeX size={12} /> : <Volume2 size={12} />}
-                      </button>
+                      </motion.button>
                     </div>
                   )}
                   <ReactMarkdown>{message.content}</ReactMarkdown>
@@ -1215,13 +1219,15 @@ function BharatAIApp() {
                         className="rounded-xl max-w-full h-auto shadow-md border border-slate-200"
                         referrerPolicy="no-referrer"
                       />
-                      <button
+                      <motion.button
+                        whileHover={{ scale: 1.1, backgroundColor: "rgba(0, 0, 0, 0.8)" }}
+                        whileTap={{ scale: 0.9 }}
                         onClick={() => handleDownloadImage(message.imageUrl!, message.id)}
-                        className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/80 text-white rounded-lg transition-all duration-200 shadow-sm backdrop-blur-sm"
+                        className="absolute top-2 right-2 p-2 bg-black/50 text-white rounded-lg transition-all duration-200 shadow-sm backdrop-blur-sm"
                         title="Download Image"
                       >
                         <Download size={16} />
-                      </button>
+                      </motion.button>
                     </div>
                   )}
                 </div>
@@ -1240,9 +1246,22 @@ function BharatAIApp() {
                 <AshokaChakra className="w-full h-full" spin />
               </div>
               <div className="flex gap-1">
-                <span className="w-1.5 h-1.5 bg-bharat-blue rounded-full animate-bounce [animation-delay:-0.3s]" />
-                <span className="w-1.5 h-1.5 bg-bharat-blue rounded-full animate-bounce [animation-delay:-0.15s]" />
-                <span className="w-1.5 h-1.5 bg-bharat-blue rounded-full animate-bounce" />
+                {[...Array(3)].map((_, i) => (
+                  <motion.span
+                    key={i}
+                    animate={{ 
+                      y: [0, -6, 0],
+                      opacity: [0.4, 1, 0.4]
+                    }}
+                    transition={{ 
+                      duration: 0.8, 
+                      repeat: Infinity, 
+                      delay: i * 0.15,
+                      ease: "easeInOut"
+                    }}
+                    className="w-1.5 h-1.5 bg-bharat-blue rounded-full"
+                  />
+                ))}
               </div>
             </div>
           </motion.div>
@@ -1266,9 +1285,14 @@ function BharatAIApp() {
                   >
                     <File size={14} className="text-bharat-blue" />
                     <span className="max-w-[100px] truncate">{file.name}</span>
-                    <button onClick={() => removeFile(idx)} className="hover:text-red-500 transition-colors">
+                    <motion.button 
+                      whileHover={{ scale: 1.2, color: "#ef4444" }}
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => removeFile(idx)} 
+                      className="hover:text-red-500 transition-colors"
+                    >
                       <X size={14} />
-                    </button>
+                    </motion.button>
                   </motion.div>
                 ))}
               </AnimatePresence>
@@ -1284,12 +1308,14 @@ function BharatAIApp() {
                 className="hidden" 
                 multiple 
               />
-              <button 
+              <motion.button 
+                whileHover={{ scale: 1.1, color: "var(--color-bharat-blue)" }}
+                whileTap={{ scale: 0.9 }}
                 onClick={() => fileInputRef.current?.click()}
-                className="text-slate-400 hover:text-bharat-blue transition-colors"
+                className="text-slate-400 transition-colors"
               >
                 <Paperclip className="size-4 md:size-5" />
-              </button>
+              </motion.button>
               <input
                 type="text"
                 value={input}
@@ -1299,7 +1325,9 @@ function BharatAIApp() {
                 className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-black font-medium"
               />
               <div className="relative group flex items-center">
-                <button 
+                <motion.button 
+                  whileHover={{ scale: 1.1 }}
+                  whileTap={{ scale: 0.9 }}
                   onClick={() => setIsImageMode(!isImageMode)}
                   className={cn(
                     "transition-all duration-300",
@@ -1308,13 +1336,15 @@ function BharatAIApp() {
                   title="Image Generation Mode"
                 >
                   <ImageIcon className="size-4 md:size-5" />
-                </button>
+                </motion.button>
                 {/* Tooltip */}
                 <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 text-white text-[10px] rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
                   {isImageMode ? "Disable Image Mode" : "Enable Image Mode"}
                 </div>
               </div>
-              <button 
+              <motion.button 
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
                 onClick={toggleListening}
                 className={cn(
                   "transition-all duration-300",
@@ -1322,7 +1352,7 @@ function BharatAIApp() {
                 )}
               >
                 {isListening ? <MicOff className="size-4 md:size-5" /> : <Mic className="size-4 md:size-5" />}
-              </button>
+              </motion.button>
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
