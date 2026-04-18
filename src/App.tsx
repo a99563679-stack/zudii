@@ -721,8 +721,9 @@ function BharatAIApp() {
         const response = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
           contents: contents,
+          tools: [{ googleSearch: {} }],
           config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
+            systemInstruction: `${SYSTEM_INSTRUCTION}\n\nCurrent Date: ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}\nCurrent Time: ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}`,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -739,7 +740,7 @@ function BharatAIApp() {
               required: ["detectedLanguage", "response"]
             }
           }
-        });
+        } as any);
 
         const responseText = response.text || "{}";
         let responseData;
@@ -1163,8 +1164,8 @@ function BharatAIApp() {
       {/* Chat Area */}
       <main className="flex-1 px-6 py-4 space-y-8 z-10">
         <div className="flex justify-center">
-          <div className="px-6 py-2 glass-card rounded-full text-xs font-medium text-slate-500 shadow-sm">
-            Today
+          <div className="px-6 py-2 glass-card rounded-full text-xs font-black text-bharat-blue shadow-sm uppercase tracking-widest">
+            {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
           </div>
         </div>
 
