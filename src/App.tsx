@@ -146,6 +146,20 @@ const AshokaChakra = ({ className, spin = false }: { className?: string, spin?: 
   </motion.svg>
 );
 
+const RESPONSE_LANGUAGES = [
+  "Auto",
+  "English",
+  "Hindi",
+  "Marathi",
+  "Gujarati",
+  "Tamil",
+  "Telugu",
+  "Kannada",
+  "Malayalam",
+  "Bengali",
+  "Punjabi"
+];
+
 const BHARAT_LANGUAGES = [
   { lang: "English", text: "Bharat" },
   { lang: "Hindi", text: "भारत" },
@@ -196,6 +210,19 @@ function BharatAIApp() {
   const [isPlaying, setIsPlaying] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isImageMode, setIsImageMode] = useState(false);
+  const [responseLanguage, setResponseLanguage] = useState('Auto');
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
   
   const allImages = useMemo(() => {
     const images: { url: string, messageId: string, sessionId: string, prompt: string, timestamp: Date }[] = [];
@@ -723,7 +750,7 @@ function BharatAIApp() {
           contents: contents,
           tools: [{ googleSearch: {} }],
           config: {
-            systemInstruction: `${SYSTEM_INSTRUCTION}\n\nCurrent Date: ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}\nCurrent Time: ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}`,
+            systemInstruction: `${SYSTEM_INSTRUCTION}\n\nCurrent Date: ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}\nCurrent Time: ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}${responseLanguage !== 'Auto' ? `\n\nIMPORTANT: The user has requested that you respond primarily in ${responseLanguage}.` : ''}`,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -1157,6 +1184,74 @@ function BharatAIApp() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {/* Three-dot Menu */}
+          <div className="relative" ref={menuRef}>
+            <motion.button
+              whileHover={{ scale: 1.05, backgroundColor: "rgba(255, 255, 255, 0.5)" }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setShowMenu(!showMenu)}
+              className="w-12 h-12 glass-card rounded-xl flex items-center justify-center text-bharat-blue shadow-sm transition-colors border border-white/50"
+            >
+              <MoreVertical size={24} />
+            </motion.button>
+
+            <AnimatePresence>
+              {showMenu && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="absolute right-0 mt-2 w-56 glass-card rounded-2xl shadow-xl z-50 border border-white/50 overflow-hidden py-2"
+                >
+                  {/* Language Section Header */}
+                  <div className="px-4 py-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Languages size={14} className="text-bharat-blue" />
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Select Language</span>
+                    </div>
+                    <span className="text-[10px] font-black text-bharat-blue uppercase bg-bharat-blue/10 px-1.5 py-0.5 rounded">{responseLanguage}</span>
+                  </div>
+
+                  {/* Language Grid */}
+                  <div className="px-2 grid grid-cols-2 gap-1 mb-2">
+                    {RESPONSE_LANGUAGES.map((lang) => (
+                      <button
+                        key={lang}
+                        onClick={() => {
+                          setResponseLanguage(lang);
+                        }}
+                        className={cn(
+                          "px-3 py-2 rounded-lg text-left text-xs font-bold transition-all",
+                          responseLanguage === lang 
+                            ? "bg-bharat-blue text-white shadow-sm" 
+                            : "hover:bg-white/40 text-slate-600"
+                        )}
+                      >
+                        {lang}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="h-[1px] bg-slate-200/50 mx-2 mb-2" />
+
+                  {/* Info Button in Menu */}
+                  <button
+                    onClick={() => {
+                      setShowInfo(true);
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-white/40 text-slate-600 transition-colors text-left"
+                  >
+                    <Info size={16} className="text-bharat-blue" />
+                    <span className="text-xs font-black uppercase tracking-wider">About Bharat AI</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </header>
